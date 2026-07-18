@@ -27,24 +27,20 @@ namespace SpriteEffectDemo
             graphics.PreferredBackBufferHeight = 600;
             graphics.SynchronizeWithVerticalRetrace = false;
             IsMouseVisible = true;
-            Window.Title = "SpriteEffect Demo — R=rotate S=scale M=sort ESC=quit";
+            Window.Title = "SpriteEffect Demo — ImGUI panel | ESC=quit";
         }
 
         protected override void LoadContent()
         {
             spriteBatch = new SpriteBatch(GraphicsDevice);
             checkerTex = TextureGen.Checkerboard(GraphicsDevice, 64, 8, Color.Red, Color.White);
+            ImGuiTestHarness.Init(GraphicsDevice);
         }
 
         protected override void Update(GameTime gameTime)
         {
             var kb = Keyboard.GetState();
             if (kb.IsKeyDown(Keys.Escape)) Exit();
-            if (kb.IsKeyDown(Keys.R) && !prevR) rotating = !rotating;
-            if (kb.IsKeyDown(Keys.S) && !prevS) scaling = !scaling;
-            if (kb.IsKeyDown(Keys.M) && !prevM)
-                sortMode = (SpriteSortMode)(((int)sortMode + 1) % 5);
-            prevR = kb.IsKeyDown(Keys.R); prevS = kb.IsKeyDown(Keys.S); prevM = kb.IsKeyDown(Keys.M);
             time += (float)gameTime.ElapsedGameTime.TotalSeconds;
 
             TestHarness.Tick(this, 3, () =>
@@ -55,10 +51,10 @@ namespace SpriteEffectDemo
                 TestHarness.Report("SpriteEffect", fails);
             });
         }
-        private bool prevR, prevS, prevM;
 
         protected override void Draw(GameTime gameTime)
         {
+            ImGuiTestHarness.NewFrame(GraphicsDevice);
             GraphicsDevice.Clear(Color.CornflowerBlue);
 
             spriteBatch.Begin(sortMode, BlendState.AlphaBlend);
@@ -85,7 +81,16 @@ namespace SpriteEffectDemo
             spriteBatch.End();
 
             if (!TestHarness.Headless)
-                Window.Title = $"SpriteEffect | Sort={sortMode} | R={(rotating?"ON":"OFF")} S={(scaling?"ON":"OFF")}";
+            {
+                ImGuiBindings.BeginPanel("SpriteEffect");
+                ImGuiBindings.ImGui_Checkbox("Rotating", ref rotating);
+                ImGuiBindings.ImGui_Checkbox("Scaling", ref scaling);
+                string[] sortNames = { "Deferred", "Immediate", "Texture", "BackToFront", "FrontToBack" };
+                int sm = (int)sortMode;
+                ImGuiBindings.Combo("Sort Mode", ref sm, sortNames);
+                sortMode = (SpriteSortMode)sm;
+                ImGuiBindings.EndPanel();
+            }
         }
 
         static void Main(string[] args)

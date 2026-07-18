@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FNA_DIR="$SCRIPT_DIR/../FNA"
-FEB_BUILDER="$SCRIPT_DIR/../FNA3D_HLSL_Test/tools/feb_builder.py"
+FEB_BUILDER="$SCRIPT_DIR/../FNA/tools/feb_builder.py"
 FEB_SRC="$FNA_DIR/src/Graphics/Effect/StockEffects/HLSL_DXC"
 FEB_DST="$FNA_DIR/src/Graphics/Effect/StockEffects/FXB"
 FNA3D_BUILD="$SCRIPT_DIR/../FNA3D_HLSL/build"
@@ -45,8 +45,8 @@ for proj in SpriteEffect BasicEffect AlphaTestEffect DualTextureEffect Environme
 
     # Ensure libFNA3D symlink
     OUTDIR="$proj/bin/Debug/net10.0"
-    if [ ! -L "$OUTDIR/libFNA3D.so.0" ]; then
-        ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$OUTDIR/libFNA3D.so.0"
+    if [ ! -L "$OUTDIR/libFNA3D.so" ]; then
+        ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$OUTDIR/libFNA3D.so"
     fi
 
     # Run headless

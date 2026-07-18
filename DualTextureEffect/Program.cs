@@ -25,7 +25,7 @@ namespace DualTextureDemo
                 PreferredBackBufferWidth = 800, PreferredBackBufferHeight = 600,
                 SynchronizeWithVerticalRetrace = false
             };
-            Window.Title = "DualTextureEffect Demo — G=fog ESC=quit";
+            Window.Title = "DualTextureEffect Demo — ImGUI panel | ESC=quit";
         }
 
         protected override void LoadContent()
@@ -36,14 +36,13 @@ namespace DualTextureDemo
             var verts = GeometryGen.DualTextureQuad();
             quad = new VertexBuffer(GraphicsDevice, typeof(DualTextureVertex), verts.Length, BufferUsage.WriteOnly);
             quad.SetData(verts);
+            ImGuiTestHarness.Init(GraphicsDevice);
         }
 
         protected override void Update(GameTime gt)
         {
             var kb = Keyboard.GetState();
             if (kb.IsKeyDown(Keys.Escape)) Exit();
-            if (KeyPress(kb, Keys.G)) fogEnabled = !fogEnabled;
-            prevKb = kb;
             time += (float)gt.ElapsedGameTime.TotalSeconds;
 
             TestHarness.Tick(this, 3, () =>
@@ -55,11 +54,10 @@ namespace DualTextureDemo
                 TestHarness.Report("DualTextureEffect", fails);
             });
         }
-        private KeyboardState prevKb;
-        private bool KeyPress(KeyboardState kb, Keys k) => kb.IsKeyDown(k) && !prevKb.IsKeyDown(k);
 
         protected override void Draw(GameTime gt)
         {
+            ImGuiTestHarness.NewFrame(GraphicsDevice);
             GraphicsDevice.Clear(Color.Black);
             // Pulsing diffuse color
             float r = 0.5f + 0.5f * (float)Math.Sin(time * 1.3f);
@@ -77,7 +75,13 @@ namespace DualTextureDemo
             GraphicsDevice.SetVertexBuffer(quad);
             GraphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, 0, 2);
             if (!TestHarness.Headless)
-                Window.Title = $"DualTexture | Diffuse=({r:F2},{g:F2},{b:F2}) | Fog={(fogEnabled?"ON":"OFF")}";
+            {
+                ImGuiBindings.BeginPanel("DualTextureEffect");
+                ImGuiBindings.ImGui_Checkbox("Fog", ref fogEnabled);
+                float[] col = { r, g, b };
+                ImGuiBindings.ImGui_ColorEdit3("Diffuse Color", col, 0);
+                ImGuiBindings.EndPanel();
+            }
         }
 
         static void Main(string[] args)

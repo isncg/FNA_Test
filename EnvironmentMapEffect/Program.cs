@@ -29,7 +29,7 @@ namespace EnvMapDemo
                 PreferredBackBufferWidth = 800, PreferredBackBufferHeight = 600,
                 SynchronizeWithVerticalRetrace = false
             };
-            Window.Title = "EnvironmentMapEffect Demo — F=fresnel +/-=amount S=spec G=fog ESC=quit";
+            Window.Title = "EnvironmentMapEffect Demo — ImGUI panel | ESC=quit";
         }
 
         protected override void LoadContent()
@@ -41,20 +41,13 @@ namespace EnvMapDemo
             var sVerts = GeometryGen.Sphere(16, 32);
             sphere = new VertexBuffer(GraphicsDevice, typeof(VertexPositionNormalTexture), sVerts.Length, BufferUsage.WriteOnly);
             sphere.SetData(sVerts);
+            ImGuiTestHarness.Init(GraphicsDevice);
         }
 
         protected override void Update(GameTime gt)
         {
             var kb = Keyboard.GetState();
             if (kb.IsKeyDown(Keys.Escape)) Exit();
-            if (KeyPress(kb, Keys.F)) fresnelEnabled = !fresnelEnabled;
-            if (KeyPress(kb, Keys.S)) specularEnabled = !specularEnabled;
-            if (KeyPress(kb, Keys.G)) fogEnabled = !fogEnabled;
-            if (KeyPress(kb, Keys.OemPlus) || KeyPress(kb, Keys.Add))
-                envAmount = Math.Min(2f, envAmount + 0.1f);
-            if (KeyPress(kb, Keys.OemMinus) || KeyPress(kb, Keys.Subtract))
-                envAmount = Math.Max(0f, envAmount - 0.1f);
-            prevKb = kb;
             time += (float)gt.ElapsedGameTime.TotalSeconds;
 
             TestHarness.Tick(this, 3, () =>
@@ -66,11 +59,10 @@ namespace EnvMapDemo
                 TestHarness.Report("EnvironmentMapEffect", fails);
             });
         }
-        private KeyboardState prevKb;
-        private bool KeyPress(KeyboardState kb, Keys k) => kb.IsKeyDown(k) && !prevKb.IsKeyDown(k);
 
         protected override void Draw(GameTime gt)
         {
+            ImGuiTestHarness.NewFrame(GraphicsDevice);
             GraphicsDevice.Clear(Color.CornflowerBlue);
             float dist = 2.5f;
             var camPos = new Vector3((float)Math.Cos(time * 0.4f) * dist, 0.5f, (float)Math.Sin(time * 0.4f) * dist);
@@ -94,7 +86,14 @@ namespace EnvMapDemo
             GraphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, 0, GeometryGen.Sphere(16, 32).Length / 3);
 
             if (!TestHarness.Headless)
-                Window.Title = $"EnvMap | Fresnel={(fresnelEnabled?"ON":"OFF")} | Amount={envAmount:F1} | Spec={(specularEnabled?"ON":"OFF")} | Fog={(fogEnabled?"ON":"OFF")}";
+            {
+                ImGuiBindings.BeginPanel("EnvironmentMapEffect");
+                ImGuiBindings.ImGui_Checkbox("Fresnel", ref fresnelEnabled);
+                ImGuiBindings.ImGui_SliderFloat("Env Amount", ref envAmount, 0f, 2f);
+                ImGuiBindings.ImGui_Checkbox("Specular", ref specularEnabled);
+                ImGuiBindings.ImGui_Checkbox("Fog", ref fogEnabled);
+                ImGuiBindings.EndPanel();
+            }
         }
 
         static void Main(string[] args)

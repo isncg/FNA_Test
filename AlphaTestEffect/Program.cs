@@ -38,7 +38,7 @@ namespace AlphaTestDemo
                 PreferredBackBufferWidth = 800, PreferredBackBufferHeight = 600,
                 SynchronizeWithVerticalRetrace = false
             };
-            Window.Title = "AlphaTestEffect Demo — F=func Up/Dn=ref R=auto G=fog ESC=quit";
+            Window.Title = "AlphaTestEffect Demo — ImGUI panel | ESC=quit";
         }
 
         protected override void LoadContent()
@@ -47,18 +47,13 @@ namespace AlphaTestDemo
             gradientTex = TextureGen.AlphaGradient(GraphicsDevice, 512, 512, Color.White);
             quad = new VertexBuffer(GraphicsDevice, typeof(VertexPositionTexture), 6, BufferUsage.WriteOnly);
             quad.SetData(GeometryGen.Quad());
+            ImGuiTestHarness.Init(GraphicsDevice);
         }
 
         protected override void Update(GameTime gt)
         {
             var kb = Keyboard.GetState();
             if (kb.IsKeyDown(Keys.Escape)) Exit();
-            if (KeyPress(kb, Keys.F)) funcIndex = (funcIndex + 1) % Funcs.Length;
-            if (KeyPress(kb, Keys.Up))   { refAlpha = Math.Min(255, refAlpha + 5); autoOsc = false; }
-            if (KeyPress(kb, Keys.Down)) { refAlpha = Math.Max(0, refAlpha - 5); autoOsc = false; }
-            if (KeyPress(kb, Keys.R))    autoOsc = !autoOsc;
-            if (KeyPress(kb, Keys.G))    fogEnabled = !fogEnabled;
-            prevKb = kb;
             time += (float)gt.ElapsedGameTime.TotalSeconds;
 
             TestHarness.Tick(this, 3, () =>
@@ -72,11 +67,10 @@ namespace AlphaTestDemo
                 TestHarness.Report("AlphaTestEffect", fails);
             });
         }
-        private KeyboardState prevKb;
-        private bool KeyPress(KeyboardState kb, Keys k) => kb.IsKeyDown(k) && !prevKb.IsKeyDown(k);
 
         protected override void Draw(GameTime gt)
         {
+            ImGuiTestHarness.NewFrame(GraphicsDevice);
             GraphicsDevice.Clear(Color.Black);
             int ra = autoOsc ? (int)(127.5f + 127.5f * Math.Sin(time * 2f)) : refAlpha;
             effect.World = Matrix.Identity;
@@ -91,7 +85,18 @@ namespace AlphaTestDemo
             GraphicsDevice.SetVertexBuffer(quad);
             GraphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, 0, 2);
             if (!TestHarness.Headless)
-                Window.Title = $"AlphaTest | {FuncNames[funcIndex]} | RefAlpha={ra} | Osc={(autoOsc?"ON":"OFF")} | Fog={(fogEnabled?"ON":"OFF")}";
+            {
+                ImGuiBindings.BeginPanel("AlphaTestEffect");
+                ImGuiBindings.Combo("Alpha Func", ref funcIndex, FuncNames);
+                if (autoOsc) ImGuiBindings.ImGui_BeginDisabled(true);
+                float raf = refAlpha;
+                ImGuiBindings.ImGui_SliderFloat("Ref Alpha", ref raf, 0f, 255f);
+                refAlpha = (int)raf;
+                if (autoOsc) ImGuiBindings.ImGui_EndDisabled();
+                ImGuiBindings.ImGui_Checkbox("Auto-Oscillate", ref autoOsc);
+                ImGuiBindings.ImGui_Checkbox("Fog", ref fogEnabled);
+                ImGuiBindings.EndPanel();
+            }
         }
 
         static void Main(string[] args)

@@ -27,27 +27,26 @@ namespace SkinnedDemo
                 PreferredBackBufferWidth = 800, PreferredBackBufferHeight = 600,
                 SynchronizeWithVerticalRetrace = false
             };
-            Window.Title = "SkinnedEffect Demo — W=weights L=light ESC=quit";
+            Window.Title = "SkinnedEffect Demo — ImGUI panel | ESC=quit";
         }
 
         protected override void LoadContent()
         {
             effect = new SkinnedEffect(GraphicsDevice);
             effect.EnableDefaultLighting();
+            effect.AmbientLightColor = new Vector3(0.4f, 0.4f, 0.4f);
             effect.WeightsPerVertex = 4;
             checkerTex = TextureGen.Checkerboard(GraphicsDevice, 256, 32, Color.Lime, Color.DarkGreen);
             var cylVerts = GeometryGen.SkinnedCylinder(16, 32);
             cylinder = new VertexBuffer(GraphicsDevice, typeof(SkinnedVertex), cylVerts.Length, BufferUsage.WriteOnly);
             cylinder.SetData(cylVerts);
+            ImGuiTestHarness.Init(GraphicsDevice);
         }
 
         protected override void Update(GameTime gt)
         {
             var kb = Keyboard.GetState();
             if (kb.IsKeyDown(Keys.Escape)) Exit();
-            if (KeyPress(kb, Keys.W)) { weightsMode = (weightsMode + 1) % 3; effect.WeightsPerVertex = Wpvs[weightsMode]; }
-            if (KeyPress(kb, Keys.L)) lightMode = (lightMode + 1) % 2;
-            prevKb = kb;
             time += (float)gt.ElapsedGameTime.TotalSeconds;
 
             TestHarness.Tick(this, 3, () =>
@@ -59,11 +58,10 @@ namespace SkinnedDemo
                 TestHarness.Report("SkinnedEffect", fails);
             });
         }
-        private KeyboardState prevKb;
-        private bool KeyPress(KeyboardState kb, Keys k) => kb.IsKeyDown(k) && !prevKb.IsKeyDown(k);
 
         protected override void Draw(GameTime gt)
         {
+            ImGuiTestHarness.NewFrame(GraphicsDevice);
             GraphicsDevice.Clear(Color.CornflowerBlue);
             float dist = 3.5f;
             var camPos = new Vector3((float)Math.Cos(time * 0.3f) * dist, 0.5f, dist);
@@ -90,8 +88,13 @@ namespace SkinnedDemo
 
             if (!TestHarness.Headless)
             {
+                ImGuiBindings.BeginPanel("SkinnedEffect");
+                string[] wpvNames = { "1", "2", "4" };
+                ImGuiBindings.Combo("Weights/Vertex", ref weightsMode, wpvNames);
+                effect.WeightsPerVertex = Wpvs[weightsMode];
                 string[] lNames = { "Vertex", "Pixel" };
-                Window.Title = $"SkinnedEffect | Wpv={Wpvs[weightsMode]} | Light={lNames[lightMode]} | Angle={angle:F2}";
+                ImGuiBindings.Combo("Lighting", ref lightMode, lNames);
+                ImGuiBindings.EndPanel();
             }
         }
 

@@ -28,7 +28,7 @@ namespace BasicEffectDemo
                 PreferredBackBufferWidth = 800, PreferredBackBufferHeight = 600,
                 SynchronizeWithVerticalRetrace = false
             };
-            Window.Title = "BasicEffect Demo — L=light F=fog T=tex V=vcol ESC=quit";
+            Window.Title = "BasicEffect Demo — ImGUI panel | ESC=quit";
         }
 
         protected override void LoadContent()
@@ -56,17 +56,13 @@ namespace BasicEffectDemo
                 ptVerts[i] = new VertexPositionTexture(baseVerts[i].Position, baseVerts[i].TextureCoordinate);
             cubePt = new VertexBuffer(GraphicsDevice, typeof(VertexPositionTexture), 36, BufferUsage.WriteOnly);
             cubePt.SetData(ptVerts);
+            ImGuiTestHarness.Init(GraphicsDevice);
         }
 
         protected override void Update(GameTime gt)
         {
             var kb = Keyboard.GetState();
             if (kb.IsKeyDown(Keys.Escape)) Exit();
-            if (KeyPress(kb, Keys.L)) lightMode = (lightMode + 1) % 3;
-            if (KeyPress(kb, Keys.F)) fogEnabled = !fogEnabled;
-            if (KeyPress(kb, Keys.T)) textureEnabled = !textureEnabled;
-            if (KeyPress(kb, Keys.V)) vcEnabled = !vcEnabled;
-            prevKb = kb;
             time += (float)gt.ElapsedGameTime.TotalSeconds;
 
             TestHarness.Tick(this, 3, () =>
@@ -78,11 +74,10 @@ namespace BasicEffectDemo
                 TestHarness.Report("BasicEffect", fails);
             });
         }
-        private KeyboardState prevKb;
-        private bool KeyPress(KeyboardState kb, Keys k) => kb.IsKeyDown(k) && !prevKb.IsKeyDown(k);
 
         protected override void Draw(GameTime gt)
         {
+            ImGuiTestHarness.NewFrame(GraphicsDevice);
             GraphicsDevice.Clear(Color.CornflowerBlue);
             float dist = 3.5f;
             var camPos = new Vector3((float)Math.Cos(time * 0.5f) * dist, 1f + (float)Math.Sin(time * 0.3f) * 0.5f, dist);
@@ -115,8 +110,15 @@ namespace BasicEffectDemo
 
             if (!TestHarness.Headless)
             {
+                ImGuiBindings.BeginPanel("BasicEffect");
                 string[] modes = { "Off", "Vertex", "Pixel" };
-                Window.Title = $"BasicEffect | Light={modes[lightMode]} | Fog={(fogEnabled?"ON":"OFF")} | Tex={(textureEnabled?"ON":"OFF")} | VC={(vcEnabled?"ON":"OFF")}";
+                int lm = lightMode;
+                ImGuiBindings.Combo("Lighting", ref lm, modes);
+                lightMode = lm;
+                ImGuiBindings.ImGui_Checkbox("Fog", ref fogEnabled);
+                ImGuiBindings.ImGui_Checkbox("Texture", ref textureEnabled);
+                ImGuiBindings.ImGui_Checkbox("Vertex Color", ref vcEnabled);
+                ImGuiBindings.EndPanel();
             }
         }
 

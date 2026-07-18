@@ -6,5 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../FNA/FNA.Core.csproj" />
+    <Compile Include="../Common/ImGuiBindings.cs" />
+    <Compile Include="../Common/ImGuiTestHarness.cs" />
   </ItemGroup>
 </Project>
