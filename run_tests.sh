@@ -9,10 +9,10 @@ FNA_DIR="$SCRIPT_DIR/../FNA"
 FEB_BUILDER="$SCRIPT_DIR/../FNA/tools/feb_builder.py"
 FEB_SRC="$FNA_DIR/src/Graphics/Effect/StockEffects/HLSL_DXC"
 FEB_DST="$FNA_DIR/src/Graphics/Effect/StockEffects/FXB"
-FNA3D_BUILD="$SCRIPT_DIR/../FNA3D_HLSL/build"
+FNA3D_BUILD="$FNA_DIR/lib/FNA3D/build"
 
-# ─── Step 1: Rebuild FNA3D_HLSL ──────────────────────────────────────
-echo "=== Building FNA3D_HLSL ==="
+# ─── Step 1: Rebuild FNA3D (submodule) ──────────────────────────────────────
+echo "=== Building FNA3D (submodule) ==="
 ninja -C "$FNA3D_BUILD" 2>&1 | tail -1
 
 # ─── Step 2: Rebuild stock FEBs ──────────────────────────────────────

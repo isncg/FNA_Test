@@ -4,79 +4,86 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is the test/validation repository for the **FNA HLSL fork** (`../FNA/`, branch `hlsl`). The goal is to verify FNA works correctly when its graphics backend is replaced from upstream FNA3D (MojoShader-based) to **FNA3D_HLSL** (`../FNA3D_HLSL/`), which replaces MojoShader with DXC — compiling HLSL source to SPIR-V and packing it into a custom FEB (FNA3D Effect Binary) for consumption by SDL_GPU at runtime.
+This is the test/validation repository for the **FNA HLSL fork** (`../FNA/`, branch `hlsl`). The goal is to verify FNA works correctly when its graphics backend uses **FNA3D_HLSL** (at `../FNA/lib/FNA3D/` as a git submodule), which replaces MojoShader with DXC — compiling HLSL source to SPIR-V and packing it into a custom FEB (FNA3D Effect Binary) for consumption by SDL_GPU at runtime.
 
 ## Repository Relationships
 
 ```
-FNA_Test/          ← you are here (test harness, not a git repo yet)
-../FNA/            ← FNA C# library (XNA 4.0 reimplementation), branch: hlsl
-../FNA3D_HLSL/     ← Fork of FNA3D: HLSL→DXC→SPIR-V pipeline, C + CMake
-../FNA3D_HLSL_Test/← Reference test programs for FNA3D_HLSL (HLSL→FEB examples)
+FNA_Test/               ← you are here (test harness)
+../FNA/                 ← FNA C# library (XNA 4.0 reimplementation), branch: hlsl
+../FNA/lib/FNA3D/       ← FNA3D_HLSL fork (submodule): HLSL→DXC→SPIR-V pipeline, C + CMake
 ```
-
-FNA normally pulls FNA3D as a git submodule at `lib/FNA3D`. For this work, that submodule should point to (or be replaced by) FNA3D_HLSL.
 
 ## Key References
 
-- **FNA3D_HLSL architecture and build**: `../FNA3D_HLSL/CLAUDE.md`
-- **HLSL→FEB pipeline reference**: `../FNA3D_HLSL_Test/CLAUDE.md`
+- **FNA3D_HLSL architecture and build**: `../FNA/lib/FNA3D/CLAUDE.md`
+- **HLSL→FEB pipeline**: `../FNA/lib/FNA3D/README` and `../FNA3D_HLSL_Test/CLAUDE.md`
 - **FNA official docs**: https://fna-xna.github.io/docs/ (example programs for testing)
-- **FNA3D_HLSL_Test example**: `../FNA3D_HLSL_Test/src/triangle_test.c` — template for C test programs using FNA3D_HLSL
-
-## Build Commands (FNA C# library)
-
-FNA is now built with .NET 10 SDK (targeting `net10.0`). Mono's `mcs` is not available in this environment.
-
-```bash
-# Build FNA
-cd ../FNA && dotnet build FNA.Core.csproj   # → bin/Debug/net10.0/FNA.dll
-
-# Build and run tests
-cd test_sprite && dotnet run
-```
-
-FNA has several .csproj variants:
-- `FNA.csproj` — full framework
-- `FNA.Core.csproj` — .NET Core / modern (targeting net10.0)
-- `FNA.NetFramework.csproj` — .NET Framework
-- `FNA.NetStandard.csproj` — .NET Standard
-
-## Test Project (`test_sprite/`)
-
-A minimal integration test that verifies the FNA + FNA3D_HLSL pipeline end-to-end:
-
-```bash
-cd test_sprite
-dotnet run    # Opens a window, renders 3 frames with SpriteBatch, exits
-```
-
-The test uses `SpriteBatch` which internally loads `SpriteEffect.feb` from embedded resources, sets the `MatrixTransform` parameter, and draws colored rectangles through SDL_GPU/Vulkan.
-
-### Native library loading
-
-The test needs `libFNA3D.so.0` in the runtime directory. Symlinks are maintained at:
-```
-test_sprite/bin/Debug/net10.0/libFNA3D.so.0 → ../../../FNA3D_HLSL/build/libFNA3D.so.27.0.0
-```
+- **FEB builder**: `../FNA/tools/feb_builder.py` (canonical copy; mirrors `../FNA3D_HLSL_Test/tools/feb_builder.py`)
 
 ## Build Commands (FNA3D_HLSL C library)
 
 ```bash
-cd ../FNA3D_HLSL
+cd ../FNA/lib/FNA3D
 cmake -B build -G Ninja . -DCMAKE_BUILD_TYPE=Release
 ninja -C build
 # Disable Dear ImGui if not needed:
 cmake -B build -G Ninja . -DFNA3D_IMGUI=OFF
 ```
 
-## Shader Pipeline (HLSL → FEB)
+## Build Commands (FNA C# library)
 
-The key workflow this project needs to test end-to-end:
+```bash
+# Build FNA
+cd ../FNA && dotnet build FNA.Core.csproj   # → bin/Debug/net10.0/FNA.dll
+
+# Build and run tests
+cd ../FNA_Test
+dotnet run --project StockEffect/SpriteEffect/SpriteEffect.csproj
+```
+
+FNA has several .csproj variants:
+- `FNA.Core.csproj` — .NET Core / modern (targeting net10.0)
+- `FNA.csproj` — full framework
+- `FNA.NetFramework.csproj` — .NET Framework
+- `FNA.NetStandard.csproj` — .NET Standard
+
+## Test Structure
+
+```
+FNA_Test/
+├── StockEffect/                   # Stock effect validation tests
+│   ├── SpriteEffect/
+│   ├── BasicEffect/
+│   ├── AlphaTestEffect/
+│   ├── DualTextureEffect/
+│   ├── EnvironmentMapEffect/
+│   ├── BasicEffectMatrix/
+│   └── SkinnedEffect/
+├── ComputeShaderEffect/           # Compute shader effect tests
+│   └── ParticleFire/              # GPU-instanced fire particles
+├── ParticleEffect/                # Shared particle FEB assets
+├── Common/                        # Shared utilities (TextureGen, TestHarness, ImGui)
+├── test_sprite/                   # Minimal SpriteBatch integration test
+├── docs/                          # Design documentation
+└── run_tests.sh                   # CI: build FNA3D → rebuild FEBs → build FNA → test all
+```
+
+## Native Library Loading
+
+The test needs `libFNA3D.so.0` in the runtime directory. Symlinks point to the submodule build:
+```
+<test>/bin/Debug/net10.0/libFNA3D.so   → ../../../../../lib/FNA3D/build/libFNA3D.so.27.0.0
+<test>/bin/Debug/net10.0/libFNA3D.so.0 → ../../../../../lib/FNA3D/build/libFNA3D.so.27.0.0
+```
+
+`run_tests.sh` manages these symlinks automatically.
+
+## Shader Pipeline (HLSL → FEB)
 
 ```
 HLSL source (.hlsl)
-  → DXC -spirv -T vs_6_0 / -T ps_6_0
+  → DXC -spirv -T vs_6_0 / -T ps_6_0 / -T cs_6_0
     → SPIR-V binary (.spv)
       → feb_builder.py (reads .feb.json manifest)
         → .feb binary (FNA3D Effect Binary)
@@ -94,7 +101,7 @@ FNA embeds 6 stock effects as compiled `.fxb` resources:
 - `SkinnedEffect.fxb`
 - `SpriteEffect.fxb`
 
-Plus 2 YUV-to-RGBA effects. These are in `../FNA/src/Graphics/Effect/StockEffects/FXB/`.
+Plus 2 YUV-to-RGBA effects. These are in `../FNA/src/Graphics/Effect/StockEffects/`.
 
 The migration task:
 1. Determine which stock effects can be reimplemented in HLSL
@@ -105,9 +112,11 @@ The migration task:
 
 ## Testing Approach
 
-Per the README: build and run FNA's official example programs against the modified FNA+FNA3D_HLSL stack. These examples are documented at https://fna-xna.github.io/docs/2b:-Building-New-Games-with-FNA/ and live in `../FNA/samples/FNA.Samples/`.
+Per the README: build and run test programs against the modified FNA+FNA3D_HLSL stack. The `run_tests.sh` script automates the full pipeline.
 
-For lower-level graphics validation, use the pattern from `../FNA3D_HLSL_Test/` — standalone C programs that load a FEB and render through FNA3D directly, bypassing the C# layer.
+```bash
+./run_tests.sh    # Full CI: build FNA3D → rebuild FEBs → build FNA → test all
+```
 
 ## Constraints
 
