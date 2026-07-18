@@ -1,0 +1,20 @@
+{
+  "techniques": [
+    {
+      "name": "Particle",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "ParticleEffect_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "ParticleEffect_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "WorldViewProj", "type": "MATRIX", "register": 0, "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]},
+    {"name": "ElapsedTime",   "type": "FLOAT",  "register": 4, "default": [0]},
+    {"name": "CameraRight",   "type": "FLOAT4", "register": 5, "default": [1,0,0,0]},
+    {"name": "CameraUp",      "type": "FLOAT4", "register": 6, "default": [0,1,0,0]}
+  ]
+}

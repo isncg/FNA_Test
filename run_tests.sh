@@ -39,25 +39,30 @@ PASS=0
 FAIL=0
 FAILED_TESTS=""
 
-for proj in SpriteEffect BasicEffect AlphaTestEffect DualTextureEffect EnvironmentMapEffect BasicEffectMatrix SkinnedEffect; do
-    echo "=== $proj ==="
-    dotnet build "$proj/$proj.csproj" --nologo -clp:NoSummary 2>&1 | tail -1
+test_proj() {
+    local cat="$1" proj="$2"
+    local path="$cat/$proj/$proj.csproj"
+    local outdir="$cat/$proj/bin/Debug/net10.0"
 
-    # Ensure libFNA3D symlink
-    OUTDIR="$proj/bin/Debug/net10.0"
-    if [ ! -L "$OUTDIR/libFNA3D.so" ]; then
-        ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$OUTDIR/libFNA3D.so"
-    fi
+    echo "=== $cat/$proj ==="
+    dotnet build "$path" --nologo -clp:NoSummary 2>&1 | tail -1
+    ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$outdir/libFNA3D.so"
+    ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$outdir/libFNA3D.so.0"
 
-    # Run headless
-    if dotnet run --no-build --project "$proj/$proj.csproj" -- --headless 2>&1 | grep -q "RESULT:.*PASS"; then
+    if dotnet run --no-build --project "$path" -- --headless 2>&1 | grep -q "RESULT:.*PASS"; then
         echo "  => PASS"
-        PASS=$((PASS + 1))
+        return 0
     else
         echo "  => FAIL"
-        FAIL=$((FAIL + 1))
-        FAILED_TESTS="$FAILED_TESTS $proj"
+        return 1
     fi
+}
+
+for proj in SpriteEffect BasicEffect AlphaTestEffect DualTextureEffect EnvironmentMapEffect BasicEffectMatrix SkinnedEffect; do
+    if test_proj "StockEffect" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS StockEffect/$proj"; fi
+done
+for proj in ParticleFire; do
+    if test_proj "ComputeShaderEffect" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS ComputeShaderEffect/$proj"; fi
 done
 
 # ─── Step 5: Summary ─────────────────────────────────────────────────
