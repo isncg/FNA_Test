@@ -1,0 +1,22 @@
+{
+  "techniques": [
+    {
+      "name": "Mesh",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "Mesh_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "Mesh_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "WorldViewProj", "type": "MATRIX", "register": 0,
+     "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]},
+    {"name": "Time",          "type": "FLOAT",  "register": 4,  "default": [0]},
+    {"name": "Amplitude",     "type": "FLOAT",  "register": 5,  "default": [0.2]},
+    {"name": "LightDir",      "type": "FLOAT3", "register": 16,
+     "default": [0.577, -0.577, -0.577]}
+  ]
+}

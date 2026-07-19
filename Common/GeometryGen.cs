@@ -63,6 +63,40 @@ namespace FNA.Test
         }
 
         /// <summary>
+        /// A unit cube centered at origin, position-only (36 vertices, 12 triangles).
+        /// Same topology as Cube() but without normals or texcoords.
+        /// </summary>
+        public static Vector3[] CubePositions()
+        {
+            var verts = new Vector3[36];
+            int i = 0;
+            AddCubePosFace(verts, ref i,  Vector3.UnitZ,  Vector3.UnitX, Vector3.UnitY);  // front
+            AddCubePosFace(verts, ref i, -Vector3.UnitZ, -Vector3.UnitX, Vector3.UnitY);  // back
+            AddCubePosFace(verts, ref i,  Vector3.UnitX, -Vector3.UnitZ, Vector3.UnitY);  // right
+            AddCubePosFace(verts, ref i, -Vector3.UnitX,  Vector3.UnitZ, Vector3.UnitY);  // left
+            AddCubePosFace(verts, ref i,  Vector3.UnitY,  Vector3.UnitZ, Vector3.UnitX);  // top
+            AddCubePosFace(verts, ref i, -Vector3.UnitY, -Vector3.UnitZ, Vector3.UnitX);  // bottom
+            return verts;
+        }
+
+        private static void AddCubePosFace(Vector3[] verts, ref int i,
+            Vector3 normal, Vector3 right, Vector3 up)
+        {
+            Vector3 half = normal * 0.5f;
+            right *= 0.5f;
+            up *= 0.5f;
+            // CW winding for XNA default CullCounterClockwiseFace
+            // Triangle 1
+            verts[i++] = half - right - up;
+            verts[i++] = half - right + up;
+            verts[i++] = half + right - up;
+            // Triangle 2
+            verts[i++] = half + right - up;
+            verts[i++] = half - right + up;
+            verts[i++] = half + right + up;
+        }
+
+        /// <summary>
         /// UV sphere centered at origin, radius 1.
         /// Stacks = vertical subdivisions, Slices = horizontal subdivisions.
         /// </summary>

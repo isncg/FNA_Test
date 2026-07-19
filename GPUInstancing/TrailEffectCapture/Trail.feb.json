@@ -1,0 +1,19 @@
+{
+  "techniques": [
+    {
+      "name": "Trail",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "Trail_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "Trail_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "ViewProj",    "type": "MATRIX", "register": 0,
+     "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]},
+    {"name": "VertexCount", "type": "INT",   "register": 4,  "default": [36]}
+  ]
+}

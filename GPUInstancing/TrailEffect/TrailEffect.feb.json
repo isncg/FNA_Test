@@ -1,0 +1,22 @@
+{
+  "techniques": [
+    {
+      "name": "Trail",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "TrailEffect_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "TrailEffect_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {
+      "name": "ViewProj",
+      "type": "MATRIX",
+      "register": 0,
+      "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+    }
+  ]
+}
