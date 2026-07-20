@@ -124,7 +124,7 @@ namespace TrailEffectDemo
 
             // ── Instance buffer: initially empty, rebuilt each frame ────
             instanceBuffer = new VertexBuffer(GraphicsDevice, instanceDecl,
-                1, BufferUsage.WriteOnly);
+                maxTrailLength, BufferUsage.WriteOnly);
 
             // ── Dummy texture (PS doesn't sample, but we bind to avoid warnings) ──
             dummyTex = TextureGen.White(GraphicsDevice);
@@ -149,8 +149,6 @@ namespace TrailEffectDemo
             int count = trailRecords.Count;
             if (count == 0) return;
 
-            instanceBuffer.Dispose();
-
             var data = new TrailInstanceData[count];
             for (int i = 0; i < count; i++)
             {
@@ -169,9 +167,7 @@ namespace TrailEffectDemo
                 );
             }
 
-            instanceBuffer = new VertexBuffer(GraphicsDevice, instanceDecl,
-                count, BufferUsage.WriteOnly);
-            instanceBuffer.SetData(data);
+            instanceBuffer.SetData(data, 0, count);
         }
 
         protected override void Update(GameTime gameTime)
@@ -282,6 +278,11 @@ namespace TrailEffectDemo
             if (ImGuiBindings.Combo("Trail Length", ref ti, trailNames))
             {
                 maxTrailLength = trailLengths[ti];
+                instanceBuffer.Dispose();
+                instanceBuffer = new VertexBuffer(GraphicsDevice, instanceDecl,
+                    maxTrailLength, BufferUsage.WriteOnly);
+                while (trailRecords.Count > maxTrailLength)
+                    trailRecords.RemoveAt(trailRecords.Count - 1);
             }
 
             bool geomRebuild = false;

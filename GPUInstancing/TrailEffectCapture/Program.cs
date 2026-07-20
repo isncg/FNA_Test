@@ -117,6 +117,10 @@ namespace TrailEffectCaptureDemo
 				vertexRead: true
 			);
 
+			// Instance color buffer (pre-allocate at max trail length)
+			instanceColorBuffer = new VertexBuffer(GraphicsDevice,
+				instanceDecl, maxTrailLength, BufferUsage.WriteOnly);
+
 			ImGuiTestHarness.Init(GraphicsDevice);
 		}
 
@@ -166,8 +170,6 @@ namespace TrailEffectCaptureDemo
 
 		private void RebuildInstanceColorBuffer(int count)
 		{
-			instanceColorBuffer?.Dispose();
-
 			var colors = new ColorData[count];
 			for (int i = 0; i < count; i++)
 			{
@@ -178,9 +180,7 @@ namespace TrailEffectCaptureDemo
 				};
 			}
 
-			instanceColorBuffer = new VertexBuffer(GraphicsDevice,
-				instanceDecl, count, BufferUsage.WriteOnly);
-			instanceColorBuffer.SetData(colors);
+			instanceColorBuffer.SetData(colors, 0, count);
 		}
 
 		protected override void Update(GameTime gameTime)
@@ -331,6 +331,9 @@ namespace TrailEffectCaptureDemo
 				ringBuffer = new StorageBuffer(GraphicsDevice,
 					maxTrailLength * vertexCount * 12,
 					vertexWrite: true, vertexRead: true);
+				instanceColorBuffer?.Dispose();
+				instanceColorBuffer = new VertexBuffer(GraphicsDevice,
+					instanceDecl, maxTrailLength, BufferUsage.WriteOnly);
 				ringHead = 0;
 			}
 
