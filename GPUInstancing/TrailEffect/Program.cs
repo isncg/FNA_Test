@@ -233,7 +233,7 @@ namespace TrailEffectDemo
             viewProjParam.SetValue(view * proj);
 
             // ── Render state ────────────────────────────────────────────
-            GraphicsDevice.BlendState = BlendState.AlphaBlend;
+            GraphicsDevice.BlendState = BlendState.NonPremultiplied;
             GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
 

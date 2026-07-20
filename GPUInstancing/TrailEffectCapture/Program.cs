@@ -251,7 +251,7 @@ namespace TrailEffectCaptureDemo
 			// Rebuild instance colors for current trail length
 			RebuildInstanceColorBuffer(trailLen);
 
-			GraphicsDevice.BlendState = BlendState.AlphaBlend;
+			GraphicsDevice.BlendState = BlendState.NonPremultiplied;
 			GraphicsDevice.DepthStencilState = DepthStencilState.Default;
 			GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
 			GraphicsDevice.Textures[0] = dummyTex;
