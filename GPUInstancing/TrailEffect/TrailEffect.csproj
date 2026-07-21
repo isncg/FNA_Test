@@ -11,6 +11,7 @@
     <Compile Include="../../Common/TestHarness.cs" />
     <Compile Include="../../Common/ImGuiBindings.cs" />
     <Compile Include="../../Common/ImGuiTestHarness.cs" />
+    <Compile Include="../../Common/Trail.cs" />
     <EmbeddedResource Include="TrailEffect.feb">
       <LogicalName>TrailEffectDemo.TrailEffect.feb</LogicalName>
     </EmbeddedResource>

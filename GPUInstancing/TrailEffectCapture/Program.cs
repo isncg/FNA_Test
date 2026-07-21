@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -11,14 +10,16 @@ using FNA.Test;
 namespace TrailEffectCaptureDemo
 {
 	/// <summary>
-	/// GPU-instanced deformable mesh trail. The mesh vertex shader applies
-	/// a procedural wave deformation and captures world-space positions to a
-	/// storage buffer. The trail vertex shader reads these captured positions
-	/// back to render ghost instances in a single DrawInstancedPrimitives call.
+	/// GPU-instanced trail via storage buffer replay.
 	///
-	/// This demonstrates the general pattern: any vertex shader can write its
-	/// output world-space positions to a storage buffer during normal rendering,
-	/// and the trail replay is independent of the deformation method.
+	/// Each frame, CPU computes world-space mesh positions and uploads them
+	/// to a ring buffer (GPU storage buffer). The trail vertex shader reads
+	/// historical positions from the storage buffer to render faded ghost
+	/// instances in a single DrawInstancedPrimitives call.
+	///
+	/// GPU-side capture is blocked by SDL3's lack of GRAPHICS_STORAGE_WRITE;
+	/// once available, the CPU SetData step can be replaced with vertex shader
+	/// RWStructuredBuffer writes.
 	/// </summary>
 	public class TrailCaptureGame : Game
 	{
@@ -26,46 +27,52 @@ namespace TrailEffectCaptureDemo
 		private Effect meshEffect;
 		private Effect trailEffect;
 		private IndexBuffer indexBuffer;
-		private VertexBuffer geometryBuffer;      // slot 0, freq=0
-		private VertexBuffer instanceColorBuffer;  // slot 1, freq=1
-		private StorageBuffer ringBuffer;          // captured world-pos ring
+		private VertexBuffer geometryBuffer;
+		private StorageBuffer ringBuffer;
 		private Texture2D dummyTex;
 
 		// Effect parameters (Mesh)
 		private EffectParameter meshWorldViewProj;
 		private EffectParameter meshTime;
 		private EffectParameter meshAmplitude;
-		private EffectParameter meshLightDir;
+		private EffectParameter meshWorld;
 
 		// Effect parameters (Trail)
 		private EffectParameter trailViewProj;
 		private EffectParameter trailVertexCount;
+		private EffectParameter trailRingHead;
+		private EffectParameter trailMaxRingSize;
 
 		// Vertex declarations
 		private VertexDeclaration geometryDecl;
-		private VertexDeclaration instanceDecl;
 
 		// Config (ImGui-tweakable)
 		private int maxTrailLength = 128;
-		private int meshStacks = 6;
-		private int meshSlices = 12;
-		private float orbitSpeed = 1.0f;
-		private float waveAmplitude = 0.25f;
-		private float cameraDistance = 5.0f;
-		private float cameraHeight = 1.0f;
+		private float orbitSpeed = 1.5f;
+		private float orbitRadiusX = 2.0f;
+		private float orbitRadiusY = 1.5f;
+		private float orbitRadiusZ = 1.5f;
+		private float selfRotationSpeed = 3.0f;
+		private float cubeScale = 0.5f;
+		private float waveAmplitude = 0.0f;
+		private float cameraDistance = 6.0f;
+		private float cameraHeight = 1.5f;
+		private bool pauseOrbit = false;
 
 		// State
 		private int vertexCount;
 		private int primitiveCount;
 		private int ringHead;
+		private int ringCount;
 		private float totalTime;
+		private int frameCount;
 		private bool meshNeedsRebuild = true;
+		private VertexPositionNormalTexture[] meshVertices;
+
+		// Previous-frame snapshot for verification
 
 		[StructLayout(LayoutKind.Sequential)]
-		private struct ColorData
-		{
-			public Vector4 Color;
-		}
+		private struct Float4 { public float X, Y, Z, W; }
 
 		public TrailCaptureGame()
 		{
@@ -75,59 +82,39 @@ namespace TrailEffectCaptureDemo
 				PreferredBackBufferHeight = 600,
 				SynchronizeWithVerticalRetrace = false
 			};
-			Window.Title = "Trail Effect Deform — GPU Instancing + Storage Buffer | ESC=quit";
+			Window.Title = "Trail Effect Capture — Storage Buffer Trail | ESC=quit";
 			IsMouseVisible = true;
 		}
 
 		protected override void LoadContent()
 		{
-			// Load embedded FEBs
-			meshEffect = LoadEmbeddedEffect("TrailEffectCaptureDemo.Mesh.feb");
+			meshEffect  = LoadEmbeddedEffect("TrailEffectCaptureDemo.Mesh.feb");
 			trailEffect = LoadEmbeddedEffect("TrailEffectCaptureDemo.Trail.feb");
 
 			meshWorldViewProj = meshEffect.Parameters["WorldViewProj"];
 			meshTime          = meshEffect.Parameters["Time"];
 			meshAmplitude     = meshEffect.Parameters["Amplitude"];
-			meshLightDir      = meshEffect.Parameters["LightDir"];
+			meshWorld         = meshEffect.Parameters["World"];
 
 			trailViewProj    = trailEffect.Parameters["ViewProj"];
 			trailVertexCount = trailEffect.Parameters["VertexCount"];
+			trailRingHead    = trailEffect.Parameters["RingHead"];
+			trailMaxRingSize = trailEffect.Parameters["MaxRingSize"];
 
-			// Vertex declarations
 			geometryDecl = new VertexDeclaration(
 				new VertexElement(0,  VertexElementFormat.Vector3, VertexElementUsage.Position, 0),
 				new VertexElement(12, VertexElementFormat.Vector3, VertexElementUsage.Normal, 0),
 				new VertexElement(24, VertexElementFormat.Vector2, VertexElementUsage.TextureCoordinate, 0)
 			);
-			instanceDecl = new VertexDeclaration(
-				new VertexElement(0, VertexElementFormat.Vector4,
-					VertexElementUsage.TextureCoordinate, 0)
-			);
 
-			// Build mesh
 			RebuildMeshGeometry();
-
-			// Dummy texture
 			dummyTex = TextureGen.White(GraphicsDevice);
-
-			// Ring buffer (allocate at max trail length)
-			ringBuffer = new StorageBuffer(GraphicsDevice,
-				maxTrailLength * vertexCount * 12, // float3 per vertex
-				vertexWrite: true,
-				vertexRead: true
-			);
-
-			// Instance color buffer (pre-allocate at max trail length)
-			instanceColorBuffer = new VertexBuffer(GraphicsDevice,
-				instanceDecl, maxTrailLength, BufferUsage.WriteOnly);
-
 			ImGuiTestHarness.Init(GraphicsDevice);
 		}
 
 		private Effect LoadEmbeddedEffect(string resourceName)
 		{
-			using var stream = Assembly.GetExecutingAssembly()
-				.GetManifestResourceStream(resourceName);
+			using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
 			using var ms = new MemoryStream();
 			stream.CopyTo(ms);
 			return new Effect(GraphicsDevice, ms.ToArray());
@@ -138,15 +125,15 @@ namespace TrailEffectCaptureDemo
 			geometryBuffer?.Dispose();
 			indexBuffer?.Dispose();
 
-			var sphere = GeometryGen.Sphere(meshStacks, meshSlices);
-			vertexCount = sphere.Length;
+			var cube = ScalePositions(GeometryGen.Cube(), cubeScale);
+			meshVertices = cube;
+			vertexCount = cube.Length;
 			primitiveCount = vertexCount / 3;
 
 			geometryBuffer = new VertexBuffer(GraphicsDevice, geometryDecl,
 				vertexCount, BufferUsage.WriteOnly);
-			geometryBuffer.SetData(sphere);
+			geometryBuffer.SetData(cube);
 
-			// Sequential index buffer for instanced trail rendering
 			var indices = new uint[vertexCount];
 			for (uint i = 0; i < vertexCount; i++)
 				indices[i] = i;
@@ -156,31 +143,17 @@ namespace TrailEffectCaptureDemo
 				vertexCount, BufferUsage.WriteOnly);
 			indexBuffer.SetData(indices);
 
-			trailVertexCount.SetValue(vertexCount);
-
-			// Rebuild ring buffer with new vertex count
 			ringBuffer?.Dispose();
 			ringBuffer = new StorageBuffer(GraphicsDevice,
-				maxTrailLength * vertexCount * 12,
+				maxTrailLength * vertexCount * 16,
 				vertexWrite: true, vertexRead: true);
 
+			trailVertexCount.SetValue((float)vertexCount);
+			trailMaxRingSize.SetValue((float)maxTrailLength);
+
 			ringHead = 0;
-			meshNeedsRebuild = false;
-		}
-
-		private void RebuildInstanceColorBuffer(int count)
-		{
-			var colors = new ColorData[count];
-			for (int i = 0; i < count; i++)
-			{
-				float t = (float)i / Math.Max(count - 1, 1);
-				colors[i] = new ColorData
-				{
-					Color = new Vector4(1.0f - t, 0.0f, t, 1.0f - t)
-				};
-			}
-
-			instanceColorBuffer.SetData(colors, 0, count);
+			ringCount = 0;
+meshNeedsRebuild = false;
 		}
 
 		protected override void Update(GameTime gameTime)
@@ -189,12 +162,13 @@ namespace TrailEffectCaptureDemo
 			if (kb.IsKeyDown(Keys.Escape)) Exit();
 
 			float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-			totalTime += dt;
+
+			if (!pauseOrbit)
+				totalTime += dt;
 
 			if (meshNeedsRebuild)
 				RebuildMeshGeometry();
 
-			// Headless test
 			TestHarness.Tick(this, 5, () =>
 			{
 				var px = TestHarness.ReadBackbuffer(GraphicsDevice);
@@ -210,9 +184,6 @@ namespace TrailEffectCaptureDemo
 			ImGuiTestHarness.NewFrame(GraphicsDevice);
 			GraphicsDevice.Clear(new Color(10, 10, 26));
 
-			int trailLen = Math.Min(maxTrailLength, ringHead);
-			if (trailLen == 0) trailLen = 1; // first frame: head only
-
 			// Camera
 			var camPos = new Vector3(0, cameraHeight, cameraDistance);
 			var view = Matrix.CreateLookAt(camPos, Vector3.Zero, Vector3.Up);
@@ -221,72 +192,108 @@ namespace TrailEffectCaptureDemo
 				GraphicsDevice.Viewport.AspectRatio,
 				0.1f, 100f
 			);
+			var viewProj = view * proj;
 
-			// Orbit: the mesh slowly spins in place
-			float orbitAngle = totalTime * orbitSpeed;
-			var world = Matrix.CreateRotationY(orbitAngle);
+			// Orbit: 3D Lissajous path
+			float t = totalTime * orbitSpeed;
+			var pos = new Vector3(
+				orbitRadiusX * (float)Math.Cos(t),
+				orbitRadiusY * (float)Math.Sin(t * 0.7f),
+				orbitRadiusZ * (float)Math.Sin(t * 0.5f)
+			);
 
-			// ── Pass 1: Render deformed mesh + capture ────────────────
+			var rotAxis = Vector3.Normalize(new Vector3(1.0f, 0.5f, 0.3f));
+			float rotAngle = totalTime * selfRotationSpeed;
+			var rot = Quaternion.CreateFromAxisAngle(rotAxis, rotAngle);
+			var world = Matrix.CreateFromQuaternion(rot) * Matrix.CreateTranslation(pos);
+
+			// ── CPU capture: compute world positions → ring buffer ───
+			var worldPositions = ComputeWorldPositions(world, totalTime);
+			var captured = new Float4[vertexCount];
+			for (int i = 0; i < vertexCount; i++)
+			{
+				captured[i] = new Float4
+				{
+					X = worldPositions[i].X,
+					Y = worldPositions[i].Y,
+					Z = worldPositions[i].Z,
+					W = 0
+				};
+			}
+
+			int byteOffset = ringHead * vertexCount * 16;
+			ringBuffer.SetData(byteOffset, captured, 0, vertexCount);
+
+			ringHead = (ringHead + 1) % maxTrailLength;
+			if (ringCount < maxTrailLength)
+				ringCount++;
+
+			// ── Pass 1: Draw mesh head first (writes depth) ─────────
 			meshAmplitude.SetValue(waveAmplitude);
 			meshTime.SetValue(totalTime);
-			meshLightDir.SetValue(new Vector3(0.577f, -0.577f, -0.577f));
-			meshWorldViewProj.SetValue(world * view * proj);
+			meshWorldViewProj.SetValue(world * viewProj);
+			meshWorld.SetValue(world);
 
 			GraphicsDevice.BlendState = BlendState.Opaque;
 			GraphicsDevice.DepthStencilState = DepthStencilState.Default;
 			GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
 
-			// Bind ring buffer as writable for capture
-			GraphicsDevice.SetVertexStorageBuffersWritable(0, ringBuffer);
-
 			meshEffect.CurrentTechnique.Passes[0].Apply();
 			GraphicsDevice.SetVertexBuffer(geometryBuffer);
 			GraphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, 0, primitiveCount);
 
-			ringHead = (ringHead + 1) % maxTrailLength;
+			// ── Pass 2: Draw trail on top (alpha blended) ──────────
+			if (ringCount > 0)
+			{
+				trailViewProj.SetValue(viewProj);
+				trailRingHead.SetValue((float)ringHead);
 
-			// ── Pass 2: Render trail instanced ────────────────────────
-			trailViewProj.SetValue(view * proj);
+				GraphicsDevice.BlendState = BlendState.NonPremultiplied;
+				GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
+				GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
 
-			// Rebuild instance colors for current trail length
-			RebuildInstanceColorBuffer(trailLen);
+				trailEffect.CurrentTechnique.Passes[0].Apply();
+				// TrailData at [[vk::binding(1, 0)]] → firstSlot 0
+				GraphicsDevice.SetVertexStorageBuffers(0, ringBuffer);
+				GraphicsDevice.SetVertexBuffer(geometryBuffer);
+				GraphicsDevice.Indices = indexBuffer;
+				GraphicsDevice.DrawInstancedPrimitives(
+					PrimitiveType.TriangleList,
+					baseVertex: 0,
+					minVertexIndex: 0,
+					numVertices: vertexCount,
+					startIndex: 0,
+					primitiveCount: primitiveCount,
+					instanceCount: ringCount
+				);
+			}
 
-			GraphicsDevice.BlendState = BlendState.NonPremultiplied;
-			GraphicsDevice.DepthStencilState = DepthStencilState.Default;
-			GraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
-			GraphicsDevice.Textures[0] = dummyTex;
+			frameCount++;
 
-			// Bind ring buffer as readable
-			GraphicsDevice.SetVertexStorageBuffers(0, ringBuffer);
-
-			trailEffect.CurrentTechnique.Passes[0].Apply();
-
-			GraphicsDevice.SetVertexBuffers(
-				new VertexBufferBinding(geometryBuffer, 0, 0),     // slot 0: ignored
-				new VertexBufferBinding(instanceColorBuffer, 0, 1)  // slot 1: color
-			);
-			GraphicsDevice.Indices = indexBuffer;
-
-			GraphicsDevice.DrawInstancedPrimitives(
-				PrimitiveType.TriangleList,
-				baseVertex: 0,
-				minVertexIndex: 0,
-				numVertices: vertexCount,
-				startIndex: 0,
-				primitiveCount: primitiveCount,
-				instanceCount: trailLen
-			);
-
-			// ImGui
 			if (!TestHarness.Headless)
 				DrawImGui();
 		}
 
+		private Vector3[] ComputeWorldPositions(Matrix world, float time)
+		{
+			var result = new Vector3[vertexCount];
+			for (int i = 0; i < vertexCount; i++)
+			{
+				Vector3 p = meshVertices[i].Position;
+				float wave = MathF.Sin(p.X * 3.0f + time)
+				           * MathF.Cos(p.Z * 3.0f + time * 0.7f)
+				           * waveAmplitude;
+				p.Y += wave;
+				result[i] = Vector3.Transform(p, world);
+			}
+			return result;
+		}
+
 		private void DrawImGui()
 		{
-			ImGuiBindings.BeginPanel("Trail Effect Deform");
+			ImGuiBindings.BeginPanel("Trail Effect Capture (Storage Buffer)");
 
-			bool rebuild = false;
+			ImGuiBindings.ImGui_Checkbox("Pause Orbit", ref pauseOrbit);
 
 			int[] trailLengths = { 32, 64, 128, 256, 512 };
 			string[] names = { "32", "64", "128", "256", "512" };
@@ -296,48 +303,29 @@ namespace TrailEffectCaptureDemo
 			{
 				maxTrailLength = trailLengths[ti];
 				ringHead = 0;
-				rebuild = true;
+				ringCount = 0;
+		ringBuffer?.Dispose();
+				ringBuffer = new StorageBuffer(GraphicsDevice,
+					maxTrailLength * vertexCount * 16,
+					vertexWrite: true, vertexRead: true);
+				trailMaxRingSize.SetValue((float)maxTrailLength);
 			}
 
-			rebuild |= ImGuiBindings.ImGui_SliderFloat("Wave Amp", ref waveAmplitude, 0.0f, 0.5f);
-			rebuild |= ImGuiBindings.ImGui_SliderFloat("Orbit Speed", ref orbitSpeed, 0.0f, 3.0f);
-
-			int[] stacks = { 4, 6, 8, 12, 16 };
-			string[] snames = { "4", "6", "8", "12", "16" };
-			int si = Array.IndexOf(stacks, meshStacks);
-			if (si < 0) si = 1;
-			if (ImGuiBindings.Combo("Stacks", ref si, snames))
-			{
-				meshStacks = stacks[si];
+			bool geomRebuild = false;
+			geomRebuild |= ImGuiBindings.ImGui_SliderFloat("Cube Scale", ref cubeScale, 0.05f, 1.0f);
+			if (geomRebuild)
 				meshNeedsRebuild = true;
-			}
 
-			int[] slices = { 6, 8, 12, 16, 24, 32 };
-			string[] slnames = { "6", "8", "12", "16", "24", "32" };
-			int sli = Array.IndexOf(slices, meshSlices);
-			if (sli < 0) sli = 1;
-			if (ImGuiBindings.Combo("Slices", ref sli, slnames))
-			{
-				meshSlices = slices[sli];
-				meshNeedsRebuild = true;
-			}
-
+			ImGuiBindings.ImGui_SliderFloat("Wave Amp", ref waveAmplitude, 0.0f, 0.5f);
+			ImGuiBindings.ImGui_SliderFloat("Orbit Speed", ref orbitSpeed, 0.1f, 5.0f);
+			ImGuiBindings.ImGui_SliderFloat("Orbit Radius X", ref orbitRadiusX, 0.5f, 4.0f);
+			ImGuiBindings.ImGui_SliderFloat("Orbit Radius Y", ref orbitRadiusY, 0.5f, 4.0f);
+			ImGuiBindings.ImGui_SliderFloat("Orbit Radius Z", ref orbitRadiusZ, 0.5f, 4.0f);
+			ImGuiBindings.ImGui_SliderFloat("Self-Rot Speed", ref selfRotationSpeed, 0.1f, 10.0f);
 			ImGuiBindings.ImGui_SliderFloat("Cam Distance", ref cameraDistance, 2.0f, 10.0f);
 			ImGuiBindings.ImGui_SliderFloat("Cam Height", ref cameraHeight, 0.0f, 4.0f);
 
-			if (rebuild)
-			{
-				ringBuffer?.Dispose();
-				ringBuffer = new StorageBuffer(GraphicsDevice,
-					maxTrailLength * vertexCount * 12,
-					vertexWrite: true, vertexRead: true);
-				instanceColorBuffer?.Dispose();
-				instanceColorBuffer = new VertexBuffer(GraphicsDevice,
-					instanceDecl, maxTrailLength, BufferUsage.WriteOnly);
-				ringHead = 0;
-			}
-
-			ImGuiBindings.ImGui_Text($"Vertices: {vertexCount}  Instances: {Math.Min(maxTrailLength, ringHead)}");
+			ImGuiBindings.ImGui_Text($"Vertices: {vertexCount}  Trail: {ringCount}/{maxTrailLength}  Frame: {frameCount}");
 			ImGuiBindings.ImGui_Text($"FPS: {(int)(1.0 / Math.Max(0.001, TargetElapsedTime.TotalSeconds))}");
 			ImGuiBindings.EndPanel();
 		}
@@ -349,7 +337,6 @@ namespace TrailEffectCaptureDemo
 				meshEffect?.Dispose();
 				trailEffect?.Dispose();
 				geometryBuffer?.Dispose();
-				instanceColorBuffer?.Dispose();
 				indexBuffer?.Dispose();
 				ringBuffer?.Dispose();
 				dummyTex?.Dispose();
@@ -362,6 +349,21 @@ namespace TrailEffectCaptureDemo
 			TestHarness.ParseArgs(args);
 			using var g = new TrailCaptureGame();
 			g.Run();
+		}
+
+		private static VertexPositionNormalTexture[] ScalePositions(
+			VertexPositionNormalTexture[] vertices, float scale)
+		{
+			var scaled = new VertexPositionNormalTexture[vertices.Length];
+			for (int i = 0; i < vertices.Length; i++)
+			{
+				scaled[i] = new VertexPositionNormalTexture(
+					vertices[i].Position * scale,
+					vertices[i].Normal,
+					vertices[i].TextureCoordinate
+				);
+			}
+			return scaled;
 		}
 	}
 }

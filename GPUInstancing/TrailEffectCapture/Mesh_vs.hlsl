@@ -1,16 +1,11 @@
 // Procedural wave mesh vertex shader.
-// Demonstrates general vertex deformation (no bones) and captures
-// world-space output positions to a storage buffer for trail replay.
-//
-// The trail vertex shader reads these captured positions to render
-// ghost instances via GPU instancing.
+// Applies wave deformation and outputs face-color based on model-space normal.
+// (Capture moved to CPU side since SDL3 GPU API doesn't support vertex storage writes.)
 
 float4x4 WorldViewProj : register(c0);
+float4x4 World         : register(c6);
 float Time            : register(c4);
 float Amplitude       : register(c5);
-float3 LightDir       : register(c16);
-
-RWStructuredBuffer<float3> CaptureBuffer : register(u0);
 
 struct VS_INPUT
 {
@@ -26,16 +21,15 @@ struct VS_OUTPUT
     float3 Normal   : TEXCOORD1;
 };
 
-VS_OUTPUT VSMain(VS_INPUT input, uint vertID : SV_VertexID)
+VS_OUTPUT VSMain(VS_INPUT input)
 {
     float3 p = input.Position;
 
-    // Procedural wave deformation (not bone-specific)
+    // Procedural wave deformation
     float wave = sin(p.x * 3.0 + Time) * cos(p.z * 3.0 + Time * 0.7) * Amplitude;
     p.y += wave;
 
-    // Capture world-space position for trail replay
-    CaptureBuffer[vertID] = p;
+    float4 worldPos = mul(float4(p, 1.0), World);
 
     VS_OUTPUT output;
     output.Position = mul(float4(p, 1.0), WorldViewProj);

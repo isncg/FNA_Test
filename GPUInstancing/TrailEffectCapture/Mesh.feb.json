@@ -16,7 +16,7 @@
      "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]},
     {"name": "Time",          "type": "FLOAT",  "register": 4,  "default": [0]},
     {"name": "Amplitude",     "type": "FLOAT",  "register": 5,  "default": [0.2]},
-    {"name": "LightDir",      "type": "FLOAT3", "register": 16,
-     "default": [0.577, -0.577, -0.577]}
+    {"name": "World",         "type": "MATRIX", "register": 6,
+     "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]}
   ]
 }

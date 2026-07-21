@@ -14,6 +14,8 @@
   "parameters": [
     {"name": "ViewProj",    "type": "MATRIX", "register": 0,
      "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]},
-    {"name": "VertexCount", "type": "INT",   "register": 4,  "default": [36]}
+    {"name": "VertexCount", "type": "FLOAT", "register": 4,  "default": [36]},
+    {"name": "RingHead",    "type": "FLOAT", "register": 5,  "default": [0]},
+    {"name": "MaxRingSize", "type": "FLOAT", "register": 6,  "default": [128]}
   ]
 }
