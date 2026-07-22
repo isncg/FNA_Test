@@ -67,6 +67,9 @@ done
 for proj in TrailEffect TrailEffectCapture; do
     if test_proj "GPUInstancing" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS GPUInstancing/$proj"; fi
 done
+for proj in JFAOutline; do
+    if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
+done
 
 # ─── Step 5: Summary ─────────────────────────────────────────────────
 echo ""

@@ -1,0 +1,45 @@
+{
+  "techniques": [
+    {
+      "name": "Scene",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "SceneMask_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "Scene_ps.hlsl", "entry": "PSMain_Scene"}
+        }
+      ]
+    },
+    {
+      "name": "Mask",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "SceneMask_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "Mask_ps.hlsl", "entry": "PSMain_Mask"}
+        }
+      ]
+    },
+    {
+      "name": "Black",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "SceneMask_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "Black_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "WorldViewProj", "type": "MATRIX", "register": 0,
+     "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]},
+    {"name": "DiffuseColor",  "type": "FLOAT4", "register": 4,
+     "default": [0.8, 0.8, 0.8, 1.0]},
+    {"name": "LightDir",      "type": "FLOAT4", "register": 5,
+     "default": [0.577, 0.577, 0.577, 0.0]},
+    {"name": "AmbientColor",  "type": "FLOAT4", "register": 6,
+     "default": [0.25, 0.25, 0.30, 0.0]},
+    {"name": "DiffuseTexture", "type": "TEXTURE2D", "register": 0}
+  ]
+}

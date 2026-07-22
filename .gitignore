@@ -4,4 +4,4 @@ obj/
 *.so.*
 .vscode/
 .idea/
-*/imgui.ini
+**/imgui.ini

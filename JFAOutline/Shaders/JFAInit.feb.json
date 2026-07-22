@@ -1,0 +1,18 @@
+{
+  "techniques": [
+    {
+      "name": "Init",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "Fullscreen_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "JFAInit_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "RTInvSize", "type": "FLOAT4", "register": 0,
+     "default": [0.00125, 0.00166, 800.0, 600.0]}
+  ]
+}

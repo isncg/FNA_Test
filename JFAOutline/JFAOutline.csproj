@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../FNA/FNA.Core.csproj" />
+    <Compile Include="../Common/TextureGen.cs" />
+    <Compile Include="../Common/GeometryGen.cs" />
+    <Compile Include="../Common/TestHarness.cs" />
+    <Compile Include="../Common/ImGuiBindings.cs" />
+    <Compile Include="../Common/ImGuiTestHarness.cs" />
+    <EmbeddedResource Include="Shaders/SceneMask.feb">
+      <LogicalName>JFAOutlineDemo.SceneMask.feb</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders/JFAInit.feb">
+      <LogicalName>JFAOutlineDemo.JFAInit.feb</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders/JFAFlood.feb">
+      <LogicalName>JFAOutlineDemo.JFAFlood.feb</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders/JFAComposite.feb">
+      <LogicalName>JFAOutlineDemo.JFAComposite.feb</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>

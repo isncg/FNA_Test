@@ -1,0 +1,30 @@
+{
+  "techniques": [
+    {
+      "name": "Composite",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "Fullscreen_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "JFAComposite_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "OutlineWidth", "type": "FLOAT",  "register": 0,
+     "default": [3.0]},
+    {"name": "OutlineColor", "type": "FLOAT4", "register": 1,
+     "default": [1.0, 1.0, 0.0, 1.0]},
+    {"name": "ScreenSize",   "type": "FLOAT4", "register": 2,
+     "default": [800.0, 600.0, 0.00125, 0.00166]},
+    {"name": "XRayColor",    "type": "FLOAT4", "register": 3,
+     "default": [0.0, 0.8, 1.0, 0.5]},
+    {"name": "XRayEnable",   "type": "FLOAT",  "register": 4,
+     "default": [1.0]},
+    {"name": "SceneTexture",   "type": "TEXTURE2D", "register": 0},
+    {"name": "JFATexture",     "type": "TEXTURE2D", "register": 1},
+    {"name": "FullMaskTex",    "type": "TEXTURE2D", "register": 2},
+    {"name": "VisibleMaskTex", "type": "TEXTURE2D", "register": 3}
+  ]
+}

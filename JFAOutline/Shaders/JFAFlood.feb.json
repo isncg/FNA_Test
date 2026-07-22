@@ -1,0 +1,19 @@
+{
+  "techniques": [
+    {
+      "name": "Flood",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "Fullscreen_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "JFAFlood_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {"name": "StepSize",  "type": "FLOAT",  "register": 0, "default": [256.0]},
+    {"name": "RTInvSize", "type": "FLOAT4", "register": 1,
+     "default": [0.00125, 0.00166, 800.0, 600.0]}
+  ]
+}
