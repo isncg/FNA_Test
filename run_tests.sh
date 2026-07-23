@@ -33,6 +33,38 @@ echo "  Copied to FXB/"
 echo "=== Building FNA ==="
 dotnet build "$FNA_DIR/FNA.Core.csproj" 2>&1 | tail -1
 
+# ─── Step 3.5: Build SDF font FEB and atlases ───────────────────────
+echo "=== Building SDF font shader ==="
+(cd "$SCRIPT_DIR/SDFFontTest/Shaders" && python3 "$FEB_BUILDER" SDFText.feb.json) 2>&1 | head -1
+
+echo "=== Generating SDF font atlases (if needed) ==="
+if [ ! -f "$SCRIPT_DIR/SDFFontTest/Fonts/en_atlas.png" ]; then
+    echo "  Building English SDF atlas..."
+    python3 "$SCRIPT_DIR/tools/sdf_font_builder.py" \
+        /usr/share/fonts/liberation/LiberationSans-Regular.ttf \
+        "$SCRIPT_DIR/tools/charset_en_ascii.txt" \
+        160 2048 "$SCRIPT_DIR/SDFFontTest/Fonts/" en \
+        --pxpadding 2
+fi
+if [ ! -f "$SCRIPT_DIR/SDFFontTest/Fonts/cn_atlas.png" ]; then
+    echo "  Building CJK SDF atlas (GB2312 + Hangul, 9,795 glyphs)..."
+    # Extract SC variant from Noto Sans CJK TTC (msdf-atlas-gen doesn't support .ttc)
+    CJK_OTF=/tmp/NotoSansCJK_SC.otf
+    if [ ! -f "$CJK_OTF" ]; then
+        python3 -c "
+from fontTools.ttLib import TTCollection
+ttc = TTCollection('/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc')
+ttc[2].save('$CJK_OTF')  # index 2 = SC
+print('Extracted SC variant to $CJK_OTF')
+"
+    fi
+    python3 "$SCRIPT_DIR/tools/sdf_font_builder.py" \
+        "$CJK_OTF" \
+        "$SCRIPT_DIR/tools/charset_cjk_common.txt" \
+        34 4096 "$SCRIPT_DIR/SDFFontTest/Fonts/" cn \
+        --pxrange 5 --pxpadding 2
+fi
+
 # ─── Step 4: Build and run all test projects ─────────────────────────
 cd "$SCRIPT_DIR"
 PASS=0
@@ -67,7 +99,7 @@ done
 for proj in TrailEffect TrailEffectCapture; do
     if test_proj "GPUInstancing" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS GPUInstancing/$proj"; fi
 done
-for proj in JFAOutline; do
+for proj in JFAOutline SDFFontTest; do
     if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
 done
 

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../FNA/FNA.Core.csproj" />
+    <Compile Include="../Common/TestHarness.cs" />
+    <Compile Include="../Common/ImGuiBindings.cs" />
+    <Compile Include="../Common/ImGuiTestHarness.cs" />
+    <EmbeddedResource Include="Shaders/SDFText.feb">
+      <LogicalName>SDFFontTest.SDFText.feb</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Fonts/cn_atlas.png">
+      <LogicalName>SDFFontTest.cn_atlas.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Fonts/cn_metrics.json">
+      <LogicalName>SDFFontTest.cn_metrics.json</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Fonts/en_atlas.png">
+      <LogicalName>SDFFontTest.en_atlas.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Fonts/en_metrics.json">
+      <LogicalName>SDFFontTest.en_metrics.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>
