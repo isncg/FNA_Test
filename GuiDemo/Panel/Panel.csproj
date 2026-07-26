@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../FNA/FNA.Core.csproj" />
+    <ProjectReference Include="../../Gui/Gui.csproj" />
+    <Compile Include="../../Common/TestHarness.cs" />
+    <Compile Include="../../Common/TextureGen.cs" />
+    <Compile Include="../../Common/ImGuiBindings.cs" />
+    <Compile Include="../../Common/ImGuiTestHarness.cs" />
+    <EmbeddedResource Include="../../SDFFontTest/Fonts/en_atlas.png">
+      <LogicalName>GuiDemo.Panel.en_atlas.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="../../SDFFontTest/Fonts/en_metrics.json">
+      <LogicalName>GuiDemo.Panel.en_metrics.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>

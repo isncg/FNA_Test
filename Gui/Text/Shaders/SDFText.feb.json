@@ -1,0 +1,57 @@
+{
+  "techniques": [
+    {
+      "name": "SDFText",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "SDFText_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "SDFText_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {
+      "name": "MatrixTransform",
+      "type": "MATRIX",
+      "register": 0,
+      "default": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+    },
+    {
+      "name": "Smoothing",
+      "type": "FLOAT",
+      "register": 4,
+      "default": [0.05]
+    },
+    {
+      "name": "OutlineColor",
+      "type": "FLOAT4",
+      "register": 5,
+      "default": [0, 0, 0, 1]
+    },
+    {
+      "name": "OutlineWidth",
+      "type": "FLOAT",
+      "register": 6,
+      "default": [0]
+    },
+    {
+      "name": "Weight",
+      "type": "FLOAT",
+      "register": 7,
+      "default": [0]
+    },
+    {
+      "name": "SDFTexture",
+      "type": "TEXTURE2D",
+      "register": 0
+    }
+  ]
+}
