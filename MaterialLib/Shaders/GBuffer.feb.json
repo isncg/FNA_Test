@@ -1,0 +1,24 @@
+{
+  "techniques": [
+    {
+      "name": "GBuffer",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "GBuffer_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "GBuffer_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "WorldViewProj", "type": "MATRIX", "register": 0 },
+    { "name": "WorldView",     "type": "MATRIX", "register": 4 }
+  ]
+}

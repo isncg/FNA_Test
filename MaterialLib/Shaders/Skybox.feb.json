@@ -1,0 +1,26 @@
+{
+  "techniques": [
+    {
+      "name": "SkyboxTechnique",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "Skybox_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "Skybox_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "CameraForward", "type": "FLOAT3", "register": 0 },
+    { "name": "CameraRight",   "type": "FLOAT3", "register": 1 },
+    { "name": "CameraUp",      "type": "FLOAT3", "register": 2 },
+    { "name": "FovParams",     "type": "FLOAT2", "register": 3 }
+  ]
+}

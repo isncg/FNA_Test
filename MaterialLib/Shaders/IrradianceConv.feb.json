@@ -1,0 +1,21 @@
+{
+  "techniques": [
+    {
+      "name": "IrradianceConvTechnique",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "IrradianceConv_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "IrradianceConv_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}
