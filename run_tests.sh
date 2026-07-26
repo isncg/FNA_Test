@@ -37,6 +37,9 @@ dotnet build "$FNA_DIR/FNA.Core.csproj" 2>&1 | tail -1
 echo "=== Building SDF font shader ==="
 (cd "$SCRIPT_DIR/SDFFontTest/Shaders" && python3 "$FEB_BUILDER" SDFText.feb.json) 2>&1 | head -1
 
+echo "=== Building StorageBuffer shader ==="
+(cd "$SCRIPT_DIR/StorageBuffer/AsteroidField/Shaders" && python3 "$FEB_BUILDER" AsteroidField.feb.json) 2>&1 | head -1
+
 echo "=== Generating SDF font atlases (if needed) ==="
 if [ ! -f "$SCRIPT_DIR/SDFFontTest/Fonts/en_atlas.png" ]; then
     echo "  Building English SDF atlas..."
@@ -96,12 +99,37 @@ done
 for proj in ParticleFire; do
     if test_proj "ComputeShaderEffect" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS ComputeShaderEffect/$proj"; fi
 done
+for proj in AsteroidField; do
+    if test_proj "StorageBuffer" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS StorageBuffer/$proj"; fi
+done
 for proj in TrailEffect TrailEffectCapture; do
     if test_proj "GPUInstancing" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS GPUInstancing/$proj"; fi
 done
 for proj in JFAOutline SDFFontTest; do
     if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
 done
+
+# GUI panel tests (all 38, G01–G38)
+echo "=== GuiDemo/Panel (G01–G38) ==="
+dotnet build "GuiDemo/Panel/Panel.csproj" --nologo -clp:NoSummary 2>&1 | tail -1
+PANEL_OUTDIR="GuiDemo/Panel/bin/Debug/net10.0"
+ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$PANEL_OUTDIR/libFNA3D.so"
+ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$PANEL_OUTDIR/libFNA3D.so.0"
+GUI_PASS=0
+GUI_FAIL=0
+for t in $(seq -w 1 38); do
+    test_name="G$t"
+    if dotnet run --no-build --project "GuiDemo/Panel/Panel.csproj" -- --headless --test "$test_name" 2>&1 | grep -q "RESULT:.*PASS"; then
+        GUI_PASS=$((GUI_PASS + 1))
+    else
+        GUI_FAIL=$((GUI_FAIL + 1))
+        FAILED_TESTS="$FAILED_TESTS GuiDemo/Panel/$test_name"
+        echo "  $test_name => FAIL"
+    fi
+done
+echo "  GuiDemo/Panel: $GUI_PASS passed, $GUI_FAIL failed"
+if [ $GUI_PASS -gt 0 ]; then PASS=$((PASS + GUI_PASS)); fi
+if [ $GUI_FAIL -gt 0 ]; then FAIL=$((FAIL + GUI_FAIL)); fi
 
 # ─── Step 5: Summary ─────────────────────────────────────────────────
 echo ""
