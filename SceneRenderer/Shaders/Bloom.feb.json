@@ -1,0 +1,26 @@
+{
+  "techniques": [
+    {
+      "name": "BloomTechnique",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "Bloom_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "Bloom_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "BloomThreshold",  "type": "FLOAT",  "register": 0 },
+    { "name": "TexelSize",       "type": "FLOAT2", "register": 1 },
+    { "name": "ShaderIndex",     "type": "FLOAT",  "register": 2 },
+    { "name": "BloomIntensity",  "type": "FLOAT",  "register": 3 }
+  ]
+}

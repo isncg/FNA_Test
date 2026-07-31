@@ -40,6 +40,11 @@ echo "=== Building SDF font shader ==="
 echo "=== Building StorageBuffer shader ==="
 (cd "$SCRIPT_DIR/StorageBuffer/AsteroidField/Shaders" && python3 "$FEB_BUILDER" AsteroidField.feb.json) 2>&1 | head -1
 
+echo "=== Building SceneRenderer FEBs ==="
+for feb_json in "$SCRIPT_DIR/SceneRenderer/Shaders"/*.feb.json; do
+    (cd "$SCRIPT_DIR/SceneRenderer/Shaders" && python3 "$FEB_BUILDER" "$(basename "$feb_json")") 2>&1 | head -1
+done
+
 echo "=== Generating SDF font atlases (if needed) ==="
 if [ ! -f "$SCRIPT_DIR/SDFFontTest/Fonts/en_atlas.png" ]; then
     echo "  Building English SDF atlas..."
@@ -107,6 +112,14 @@ for proj in TrailEffect TrailEffectCapture; do
 done
 for proj in JFAOutline SDFFontTest; do
     if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
+done
+
+# SceneRenderer (deferred PBR pipeline)
+if test_proj "." "SceneRenderer"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS SceneRenderer"; fi
+
+# RTS tests (FNA_RTS Phase 1)
+for proj in Camera2D PrimitiveLines IsometricTiles ScreenToWorld DepthSorting RectSelection; do
+    if test_proj "RTS" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS RTS/$proj"; fi
 done
 
 # GUI panel tests (all 38, G01–G38)

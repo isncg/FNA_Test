@@ -1,0 +1,23 @@
+{
+  "techniques": [
+    {
+      "name": "ShadowTechnique",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "ShadowMap_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "ShadowMap_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "WorldViewProj", "type": "MATRIX", "register": 0 }
+  ]
+}

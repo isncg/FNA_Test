@@ -1,0 +1,30 @@
+{
+  "techniques": [
+    {
+      "name": "DeferredLighting",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "DeferredLighting_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "DeferredLighting_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "EyePosition",     "type": "FLOAT3", "register": 0 },
+    { "name": "AmbientLight",    "type": "FLOAT3", "register": 3 },
+    { "name": "EnvIntensity",    "type": "FLOAT",  "register": 6 },
+    { "name": "NumActiveLights", "type": "FLOAT",  "register": 7 },
+    { "name": "LightData",       "type": "FLOAT4", "register": 8, "count": 64 },
+    { "name": "InvViewProj",     "type": "MATRIX", "register": 72 },
+    { "name": "LightViewProj",   "type": "MATRIX", "register": 76 },
+    { "name": "Projection",      "type": "MATRIX", "register": 80 }
+  ]
+}

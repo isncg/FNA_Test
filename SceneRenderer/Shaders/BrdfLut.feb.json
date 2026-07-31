@@ -1,0 +1,21 @@
+{
+  "techniques": [
+    {
+      "name": "BrdfLutTechnique",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "BrdfLut_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "BrdfLut_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}

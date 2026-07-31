@@ -1,0 +1,24 @@
+{
+  "techniques": [
+    {
+      "name": "BlurAOTechnique",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "BlurAO_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "BlurAO_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "TexelSize",     "type": "FLOAT2", "register": 0 },
+    { "name": "BlurSharpness", "type": "FLOAT",  "register": 1 }
+  ]
+}

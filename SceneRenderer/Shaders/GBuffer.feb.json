@@ -1,0 +1,29 @@
+{
+  "techniques": [
+    {
+      "name": "PNT",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {
+            "source": "GBuffer_vs.hlsl",
+            "entry": "VSMain"
+          },
+          "pixelShader": {
+            "source": "GBuffer_ps.hlsl",
+            "entry": "PSMain"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    { "name": "WorldViewProj",        "type": "MATRIX", "register": 0 },
+    { "name": "World",                "type": "MATRIX", "register": 4 },
+    { "name": "WorldInverseTranspose","type": "MATRIX", "register": 8 },
+    { "name": "AlbedoTint",           "type": "FLOAT3", "register": 12 },
+    { "name": "MetallicScale",        "type": "FLOAT",  "register": 13 },
+    { "name": "RoughnessScale",       "type": "FLOAT",  "register": 14 },
+    { "name": "PrevViewProj",         "type": "MATRIX", "register": 15 }
+  ]
+}
