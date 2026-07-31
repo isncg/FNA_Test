@@ -275,6 +275,15 @@ if exist "%SCRIPT_DIR%SharedDepth\Shaders\Geometry.feb.json" (
     popd
 )
 
+REM ComputeDispatch shader (FNA3D UE5 alignment Phase 4)
+if exist "%SCRIPT_DIR%ComputeDispatch\Shaders\Doubler.feb.json" (
+    echo   Building ComputeDispatch shader FEB...
+    pushd "%SCRIPT_DIR%ComputeDispatch\Shaders"
+    %PYTHON_CMD% "%FEB_BUILDER%" Doubler.feb.json >nul 2>&1
+    if !ERRORLEVEL! neq 0 echo   [WARN] Doubler FEB build failed
+    popd
+)
+
 REM SceneRenderer shaders
 if exist "%SCRIPT_DIR%SceneRenderer\Shaders\" (
     echo   Building SceneRenderer FEBs...
@@ -383,6 +392,7 @@ call :run_test "" SDFFontTest
 call :run_test "" DepthSampling
 call :run_test "" DepthTexture
 call :run_test "" SharedDepth
+call :run_test "" ComputeDispatch
 
 REM ─── SceneRenderer (deferred PBR pipeline) ─────────────────────────
 call :run_test "" SceneRenderer

@@ -49,6 +49,9 @@ echo "=== Building DepthTexture shaders ==="
 echo "=== Building SharedDepth shader ==="
 (cd "$SCRIPT_DIR/SharedDepth/Shaders" && python3 "$FEB_BUILDER" Geometry.feb.json) 2>&1 | head -1
 
+echo "=== Building ComputeDispatch shader ==="
+(cd "$SCRIPT_DIR/ComputeDispatch/Shaders" && python3 "$FEB_BUILDER" Doubler.feb.json) 2>&1 | head -1
+
 echo "=== Building SceneRenderer FEBs ==="
 for feb_json in "$SCRIPT_DIR/SceneRenderer/Shaders"/*.feb.json; do
     (cd "$SCRIPT_DIR/SceneRenderer/Shaders" && python3 "$FEB_BUILDER" "$(basename "$feb_json")") 2>&1 | head -1
@@ -120,6 +123,9 @@ for proj in TrailEffect TrailEffectCapture; do
     if test_proj "GPUInstancing" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS GPUInstancing/$proj"; fi
 done
 for proj in JFAOutline SDFFontTest DepthSampling DepthTexture SharedDepth; do
+    if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
+done
+for proj in ComputeDispatch; do
     if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
 done
 

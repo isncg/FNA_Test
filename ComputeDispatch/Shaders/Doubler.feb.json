@@ -1,0 +1,14 @@
+{
+  "techniques": [
+    {
+      "name": "Doubler",
+      "passes": [
+        {
+          "name": "P0",
+          "computeShader": {"source": "Doubler_cs.hlsl", "entry": "CSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}

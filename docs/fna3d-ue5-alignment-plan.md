@@ -4,7 +4,7 @@
 
 目标：修改 FNA3D_HLSL，使其支持 Unreal Engine 5 风格的延迟渲染管线。每一项变更都配有独立的测试程序。
 
-> **状态说明**：Phase 0（基线对齐）、Phase 1（可采样深度）、Phase 2（深度纹理包装）、Phase 3（共享深度）已完成；Phase 4 尚未开始。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
+> **状态说明**：Phase 0-4 均已完成（基线对齐、可采样深度、深度纹理包装、共享深度、计算着色器）。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
 >
 > **Phase 0（基线对齐）已于 2026-07-31 完成**，详见下文。完成 Phase 0 后，FNA3D 子模块应位于 `c821adb`（`storage buffer api`）及其后提交。
 
@@ -313,12 +313,75 @@ SharedDepth/
 
 ---
 
-## Phase 4: 计算着色器支持
+## Phase 4: 计算着色器支持（已完成）
 
 ### 目标
 添加 `DispatchCompute` 支持，用于 GPU 端分块光照剔除、Hi-Z 生成、SSAO 等。
 
-> **前置依赖（已由 Phase 0 完成）**：C# 层已有 `StorageBuffer` 类（`FNA/src/Graphics/Vertices/StorageBuffer.cs`）及对应 P/Invoke；`FNA3D.h` 公共 API 与 `FNA3D_Driver_SDL.c` 在 `c821adb` 已加入 `GenStorageBuffer` / `SetStorageBufferData` / `GetStorageBufferData` / `SetVertexStorageBuffers` 等实现。Phase 4 只需在此基础上扩展计算管线与计算通道资源绑定。
+> **前置依赖（已由 Phase 0 完成）**：C# 层已有 `StorageBuffer` 类（`FNA/src/Graphics/Vertices/StorageBuffer.cs`）及对应 P/Invoke；`FNA3D.h` 公共 API 与 `FNA3D_Driver_SDL.c` 在 `c821adb` 已加入 `GenStorageBuffer` / `SetStorageBufferData` / `GetStorageBufferData` / `SetVertexStorageBuffers` 等实现。Phase 4 在此基础上扩展计算管线与计算通道资源绑定。
+
+### 实际实现（2026-07-31）
+
+> 下文 4.1-4.5 为原计划草图，实际实现与之有若干差异，以本节为准。
+
+**C 层（`FNA/lib/FNA3D`）**：
+- `SDLGPU_Effect` 新增 `SDL_GPUComputePipeline **computePipelines`（每 pass 一个，图形 pass 为 NULL）；`CreateEffect` 中对 `computeShaderIndex >= 0` 的 pass 创建计算管线，`AddDisposeEffect` 释放。
+- `SDLGPU_DispatchCompute(driverData, effect, pass, tgX, tgY, tgZ)`：**第三参数是 pass 索引（uint32_t）而非计划中的 `FNA3D_EffectPass*`**；先调 `SDLGPU_INTERNAL_EndRenderPass`（计算通道不能嵌套在渲染通道内），然后 `SDL_BeginGPUComputePass` → 绑定管线/存储缓冲区/uniform → `SDL_DispatchGPUCompute` → `SDL_EndGPUComputePass`。
+- 新增 `SDLGPU_SetComputeStorageBuffers`：记录读写（u#，随 compute pass 开始绑定）与只读（t#，`SDL_BindGPUComputeStorageBuffers`）缓冲区，由下一次 `DispatchCompute` 消费。读写绑定 `cycle = false`，避免 cycling 换掉 GetData 回读的那个分配。
+- `GenStorageBuffer`：`vertexRead` 时额外加 `SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ`，使同一缓冲区可同时嗂计算与图形。
+- 函数表新增 `SetComputeStorageBuffers` / `DispatchCompute`（+ `ASSIGN_DRIVER_FUNC`）；公共 API `FNA3D_SetComputeStorageBuffers` / `FNA3D_DispatchCompute`（首参为 `FNA3D_Device*`，`DispatchCompute` 的 pass 为 `uint32_t` 全局索引）。
+
+**C# 层（`FNA/src/Graphics`）**：
+- `FNA3D.cs`：`FNA3D_SetComputeStorageBuffers` / `FNA3D_DispatchCompute` P/Invoke。
+- `EffectPass.cs`：新增 internal `GlobalPassIndex` 与 `EffectHandle`，供 dispatch 取 pass 索引与 `FNA3D_Effect*`。
+- `GraphicsDevice.cs`：`SetComputeStorageBuffers(firstSlot, ...)`（只读 t#）、`SetComputeStorageBuffersWritable(...)`（读写 u#）、`DispatchCompute(EffectPass, x, y, z)`。
+
+**关键修复：feb_builder 反射 bug**：`reflect_spirv` 原本用 `NonReadable` decoration 区分读写存储缓冲区，但 **DXC 对 `RWStructuredBuffer` 不发 `NonWritable`/`NonReadable`**，导致读写缓冲区被误判为只读（rosb=1, rwsb=0），计算管线布局缺少 set 1 绑定 → Vulkan 验证错误 + `SDL_GPU_CheckComputeBindings` 断言失败。修复：compute 阶段改用**描述符集**判别（feb_builder 确定性地将 u→set 1、t→set 0、uniform→set 2）；图形路径不变（其读/写计数会求和）。
+
+### 测试程序: `ComputeDispatch/`（已创建）
+
+**路径**: `../FNA_Test/ComputeDispatch/`
+
+> **注意**：现有 `ComputeShaderEffect/ParticleFire/` 目录名容易混淆，但它使用顶点着色器里的 GPU Instancing 实现粒子动画，**不是**计算着色器示例。
+
+**实际测试内容**：
+1. 加载只含 compute pass 的 FEB（`Doubler`，vs/ps 索引为 -1）
+2. 创建 256 元素 `RWStructuredBuffer<float>`（`vertexWrite=true` → COMPUTE_STORAGE_WRITE，`vertexRead=true` 供回读）
+3. `SetComputeStorageBuffersWritable(buf)` → `DispatchCompute(pass, 4,1,1)`（4 组×64 线程）
+4. `GetData` 回读，验证 `Output[i] == i*2.0` 全部 256 个值
+
+**计算着色器** (`Doubler_cs.hlsl`)：
+```hlsl
+RWStructuredBuffer<float> Output : register(u0);
+
+[numthreads(64, 1, 1)]
+void CSMain(uint3 tid : SV_DispatchThreadID)
+{
+    Output[tid.x] = (float)tid.x * 2.0;
+}
+```
+
+**验证结果**：
+- headless 运行 `RESULT: ComputeDispatch PASS`（全 256 值正确：[1]=2, [100]=200, [255]=510）
+- Vulkan 验证层无错误
+- 回归：AsteroidField / BasicEffect / DepthSampling / DepthTexture / SharedDepth / JFAOutline / TrailEffect 均 PASS
+
+**实际文件**：
+```
+ComputeDispatch/
+  ComputeDispatch.csproj
+  Program.cs                   # 计算调度 + 回读验证
+  Shaders/Doubler_cs.hlsl      # RWStructuredBuffer<float> ← tid*2
+  Shaders/Doubler.feb.json     # 只含 computeShader 的 pass
+```
+
+已注册到 `run_tests.sh` / `run_tests.bat`。
+
+**已知局限**：计算通道 uniform 走与图形共享的 `uniformData`（slot 0）；数组型参数（如 `LightData[64]`）仍受 FEB 无 count 字段限制（见末尾独立缺陷）。
+
+---
+
+## 附：原计划草图（已过时，仅供对照）
 
 ### 变更
 
@@ -510,13 +573,13 @@ Phase 2 (深度纹理包装) 【已完成】←── 依赖 Phase 1 的 SAMPLER
     ↓
 Phase 3 (共享深度缓冲区) 【已完成】←── 依赖 Phase 2 的纹理包装
 
-Phase 4 (计算着色器) ←── 依赖 Phase 0 的 StorageBuffer；可与 Phase 1-3 并行
+Phase 4 (计算着色器) 【已完成】←── 依赖 Phase 0 的 StorageBuffer；与 Phase 1-3 并行
 ```
 
 ## 构建和测试
 
 ### 构建单个测试
-> `ComputeDispatch/` 待 Phase 4 实施时创建；`DepthSampling/`、`DepthTexture/`、`SharedDepth/` 已存在。
+> `DepthSampling/`、`DepthTexture/`、`SharedDepth/`、`ComputeDispatch/` 均已存在。
 
 ```bash
 cd ../FNA_Test/DepthSampling
@@ -545,7 +608,7 @@ ninja -C build
 | 1 | 完成 | DepthSampling | 深度缓冲区有 SAMPLER 用法；双路径深度测试正常 | `vkCreateImage` 的 usage 标志 |
 | 2 | 完成 | DepthTexture | DepthStencilTexture 返回有效纹理；采样值匹配写入深度 | 片段着色器描述符集绑定 |
 | 3 | 完成 | SharedDepth | 两个通道使用同一深度缓冲区；`--no-share` 负对照失败 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
-| 4 | 计划 | ComputeDispatch | Compute 输出匹配预期 | `vkCmdDispatch` 和存储缓冲区内容 |
+| 4 | 完成 | ComputeDispatch | Compute 输出匹配预期（全 256 值） | `vkCmdDispatch` 和存储缓冲区内容 |
 
 ## 回滚到 SceneRenderer 修复（未来重构方向）
 
