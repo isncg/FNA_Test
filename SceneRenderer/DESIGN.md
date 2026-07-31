@@ -92,3 +92,22 @@ depth and called `discard`, blending additively.
 - **Bloom**: Bright extract → 4-step downsample → 4-step upsample (Karis 2013 tent filter)
 - **Shadows**: Single directional shadow map, 2048x2048 R32F, 3x3 PCF
 - **Tonemap**: ACES filmic (Narkowitz fit) + gamma 2.2
+
+## Known Issues
+
+- **Material detail fidelity**: surface detail does not look right yet (observed
+  2026-07-31 in the interactive view, after the shared-depth refactor and the
+  material-binding fix landed). Not root-caused yet; the investigation should
+  start from the observed artefacts rather than from these notes. What is known
+  about the current implementation:
+  - The vertex format is PNT (`Position`, `Normal`, `TexCoord`) — **no tangents**.
+    `GBuffer_ps` therefore builds a tangent frame from the world normal alone
+    (`T = normalize(cross(up, N))`), so the normal map's tangent space is not
+    tied to the UV layout. Detail can be rotated or mirrored per surface, and it
+    degenerates where `N` is parallel to `up`.
+  - `ORMMap` is sampled as `R=AO, G=Roughness, B=Metallic`; worth confirming
+    against how the Poly Haven `_packed` textures actually store those channels.
+- **Teapot mesh attributes**: the `.tris` source has neither normals nor
+  texcoords, so `TeapotModel.Load` averages face normals across *all* vertices
+  (an O(n²) pass over 10464 vertices) and generates UVs by cylindrical
+  projection. That UV scheme is a plausible contributor to the item above.
