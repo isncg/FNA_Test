@@ -4,6 +4,73 @@
 
 目标：修改 FNA3D_HLSL，使其支持 Unreal Engine 5 风格的延迟渲染管线。每一项变更都配有独立的测试程序。
 
+> **状态说明**：本文件为尚未开始的实现计划（当前代码中所有 Phase 1-4 的新 API、测试目录均未创建）。下文的“当前”均指计划实施前的基线代码，引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
+>
+> **Phase 0（基线对齐）已于 2026-07-31 完成**，详见下文。完成 Phase 0 后，FNA3D 子模块应位于 `c821adb`（`storage buffer api`），所有引用行号也以该提交为准。
+
+## Phase 0: 基线对齐（已完成）
+
+### 发现的问题
+
+在准备 Phase 1 时发现 `../FNA/lib/FNA3D` 子模块的源码与 C# 层及预编译 `FNA3D.dll` 不一致：
+
+| 项目 | 状态 |
+|------|------|
+| `../FNA/lib/FNA3D` 当前 HEAD | `453b1dd`（`FEB v2: 52-byte shader entries, add COMPUTE stage support`） |
+| `../FNA` 父仓库记录的子模块提交 | `c821adb`（`storage buffer api`） |
+| 各测试目录中的 `FNA3D.dll` | `2319794` 字节，来自 `453b1dd`，**未导出** `FNA3D_GenStorageBuffer` 等 StorageBuffer API |
+| `../FNA/src/Graphics/FNA3D.cs` | 已包含 `FNA3D_GenStorageBuffer` / `SetStorageBufferData` / `SetVertexStorageBuffers` 等 P/Invoke |
+| `StorageBuffer/AsteroidField` | 已包含使用 `StructuredBuffer` / `RWStructuredBuffer` 的顶点着色器测试 |
+
+后果：
+1. 若按 `453b1dd` 源码重新编译 FNA3D，会丢失 StorageBuffer 支持，导致 `AsteroidField` 等现有测试在 `EntryPointNotFoundException` 中失败。
+2. `StorageBuffer/AsteroidField/Shaders/AsteroidField.feb` 在工作目录中被重建为 `4694` 字节，与提交版本 `4674` 字节不兼容，导致 `FNA3D_CreateEffect` 内访问冲突（`0xC0000005`）。
+
+### 已执行的修复
+
+1. **子模块回正**：在 `../FNA/lib/FNA3D` 执行 `git checkout c821adb`，使源码与父仓库记录及预编译 DLL 的能力对齐。
+2. **重新编译 FNA3D**：
+   ```bash
+   cd ../FNA/lib/FNA3D
+   cmake --build build --clean-first
+   ```
+   生成 `build/FNA3D.dll`（`2322343` 字节），`objdump -p` 确认已导出：
+   - `FNA3D_GenStorageBuffer`
+   - `FNA3D_AddDisposeStorageBuffer`
+   - `FNA3D_SetStorageBufferData`
+   - `FNA3D_GetStorageBufferData`
+   - `FNA3D_SetVertexStorageBuffers`
+3. **恢复 FEB 文件**：将 `StorageBuffer/AsteroidField/Shaders/AsteroidField.feb` 恢复为 `499222a` 提交版本（`4674` 字节），并重新嵌入到 `AsteroidField.dll`。
+4. **保留 imgui depth-clip 补丁**：`thirdparty/imgui/backends/imgui_impl_sdlgpu3.cpp` 中的 `enable_depth_clip = true` 本地修改已保留；`patches/0001-sdlgpu3-enable-depth-clip.patch` 仍有空白字符差异，不影响功能。
+
+### 验证结果
+
+```bash
+cd ../FNA_Test/StorageBuffer/AsteroidField/bin/Debug/net10.0
+cp ../../../../../FNA/lib/FNA3D/build/FNA3D.dll .
+timeout 5 ./AsteroidField.exe
+```
+
+输出：
+```
+Validation layers enabled, expect debug level performance!
+SDL_GPU Driver: Vulkan
+Vulkan Device: NVIDIA GeForce RTX 2060
+Vulkan Driver: NVIDIA 581.42
+Vulkan Conformance: 1.4.1.3
+[AsteroidField] Effect loaded: 1 techniques, 5 params
+[AsteroidField] 512 instances ready.
+```
+
+验证通过，无崩溃。
+
+### 后续注意事项
+
+- 所有测试目录 `bin/Debug/net10.0/FNA3D.dll` 仍是旧版 `453b1dd` 预编译 DLL；使用 `run_tests.bat`/`run_tests.sh` 时会从 `../FNA/lib/FNA3D/build/FNA3D.dll` 重新复制，因此无需逐个手动替换。
+- 在继续 Phase 1 前，确保 `../FNA/lib/FNA3D` 始终位于 `c821adb` 或之后；若子模块被意外切回 `453b1dd`，StorageBuffer 测试会再次失败。
+
+---
+
 ## 架构背景
 
 ### FNA3D 类型层次
@@ -12,7 +79,7 @@
 FNA3D_Texture* ────── SDLGPU_TextureHandle* ────── SDL_GPUTexture*
   (可采样纹理)         (内部包装)                   (GPU 资源)
 
-FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDLGPUTexture*
+FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDL_GPUTexture*
   (深度/颜色附件)       (内部包装)                   (GPU 资源，不同用途标志)
 ```
 
@@ -23,7 +90,7 @@ FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDLGPUTe
 | 层级 | 文件 |
 |------|------|
 | FNA3D 公共 API | `../FNA/lib/FNA3D/include/FNA3D.h` |
-| 驱动程序函数表 | `../FNA/lib/FNA3D/src/FNA3D_Driver.h` |
+| 驱动程序函数表（`struct FNA3D_Device`） | `../FNA/lib/FNA3D/src/FNA3D_Driver.h` |
 | SDL_GPU 驱动 | `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` |
 | 效果系统 | `../FNA/lib/FNA3D/src/FNA3D_Effect.c` / `.h` |
 | C# P/Invoke | `../FNA/src/Graphics/FNA3D.cs` |
@@ -38,7 +105,7 @@ FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDLGPUTe
 ## Phase 1: 可采样的深度缓冲区
 
 ### 目标
-使深度模板缓冲区可以作为着色器纹理采样（`SV_Depth` 填充、SSAO、软阴影等需要）。
+使深度模板缓冲区可以作为着色器纹理采样（SSAO、软阴影、屏幕空间反射等需要；与像素着色器输出 `SV_Depth` 不同）。
 
 ### 变更
 
@@ -46,7 +113,7 @@ FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDLGPUTe
 
 **文件**: `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c`
 
-**位置 1** — `SDLGPU_GenDepthStencilRenderbuffer` (约第 2967-2977 行):
+**位置 1** — `SDLGPU_GenDepthStencilRenderbuffer` (约第 2956 行，usage 在第 2975 行):
 ```c
 // 当前：
 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
@@ -55,7 +122,7 @@ SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
 ```
 
-**位置 2** — `SDLGPU_INTERNAL_CreateFauxBackbuffer` (约第 2691-2701 行):
+**位置 2** — `SDLGPU_INTERNAL_CreateFauxBackbuffer` (约第 2657 行，深度 usage 在第 2699 行):
 ```c
 // 当前：
 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
@@ -64,7 +131,7 @@ SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
 ```
 
-**位置 3** — 能力查询 (约第 4946-4957 行):
+**位置 3** — 能力查询 (`SDL_GPUTextureSupportsFormat` 第 4943-4954 行):
 ```c
 // 更新 uses 标志以包含 SAMPLER：
 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER
@@ -74,9 +141,9 @@ SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER
 
 在驱动初始化时查询 `SDL_GPUTextureSupportsFormat` 是否需要更新。部分 GPU 可能不支持可采样的深度纹理（极少数情况）。
 
-### 测试程序: `DepthSampling/`
+### 测试程序: `DepthSampling/`（待创建）
 
-**路径**: `../FNA_Test/DepthSampling/`
+**路径**: `../FNA_Test/DepthSampling/`（当前不存在）
 
 **核心逻辑**:
 1. 创建一个带有 `DepthFormat.Depth24Stencil8` 的 `RenderTarget2D`
@@ -126,6 +193,8 @@ FNA3DAPI FNA3D_Texture* FNA3D_GetDepthStencilTexture(
 
 #### 2.2 FNA3D_Driver_SDL.c — 实现
 
+> 需一并解决生命周期问题：返回的 `SDLGPU_TextureHandle` 共享底层 `SDL_GPUTexture*`，但不能在 `AddDisposeTexture` 时释放该 `SDL_GPUTexture`（它由 `Renderbuffer` 拥有）。实现时需要区分“由渲染缓冲区拥有的共享纹理”和“独立创建的纹理”。
+
 ```c
 static FNA3D_Texture* SDLGPU_GetDepthStencilTexture(
     FNA3D_Renderer *driverData,
@@ -136,13 +205,14 @@ static FNA3D_Texture* SDLGPU_GetDepthStencilTexture(
     SDL_memcpy(handle, rb->textureHandle, sizeof(SDLGPU_TextureHandle));
     // handle->boundAsRenderTarget 等字段需重置
     handle->boundAsRenderTarget = 0;
+    // FIXME: 需要标记该 handle 不拥有底层 SDL_GPUTexture，避免重复释放
     return (FNA3D_Texture*) handle;
 }
 ```
 
 #### 2.3 FNA3D_Driver.h — 函数表条目
 
-在 `FNA3D_RendererFunctions` 结构体中添加:
+在 `FNA3D_Device` 函数表（`../FNA/lib/FNA3D/src/FNA3D_Driver.h`）中添加:
 ```c
 FNA3D_Texture* (*GetDepthStencilTexture)(
     FNA3D_Renderer *driverData,
@@ -183,9 +253,9 @@ public Texture2D DepthStencilTexture
 
 **注意**: `Texture2D` 可能需要一个新的内部构造函数，接受预先存在的 `FNA3D_Texture*` 指针，避免重复创建。
 
-### 测试程序: `DepthTexture/`
+### 测试程序: `DepthTexture/`（待创建）
 
-**路径**: `../FNA_Test/DepthTexture/`
+**路径**: `../FNA_Test/DepthTexture/`（当前不存在）
 
 **核心逻辑**:
 1. 创建带有深度的 `RenderTarget2D`，渲染已知深度的三角形
@@ -253,15 +323,19 @@ public RenderTarget2D(GraphicsDevice device, int width, int height,
 添加 `SetRenderTargets` 重载，接受外部深度：
 
 ```csharp
-public void SetRenderTargets(DepthStencilBuffer depthBuffer, params RenderTargetBinding[] renderTargets)
+public void SetRenderTargets(
+    DepthStencilBuffer depthBuffer,
+    params RenderTargetBinding[] renderTargets)
 {
     // 使用提供的深度缓冲区调用 FNA3D_SetRenderTargets
 }
 ```
 
-### 测试程序: `SharedDepth/`
+> 注意 C# 重载解析：该签名与现有的 `SetRenderTargets(params RenderTargetBinding[])` 在传入 `null` 或数组时可能产生歧义，实际实现时可改为 `SetRenderTargets(DepthStencilBuffer, RenderTargetBinding[])`（不含 `params`）或新增独立方法名。
 
-**路径**: `../FNA_Test/SharedDepth/`
+### 测试程序: `SharedDepth/`（待创建）
+
+**路径**: `../FNA_Test/SharedDepth/`（当前不存在）
 
 **核心逻辑**:
 1. 创建 `DepthStencilBuffer` (D24S8)
@@ -294,11 +368,16 @@ SharedDepth/
 ### 目标
 添加 `DispatchCompute` 支持，用于 GPU 端分块光照剔除、Hi-Z 生成、SSAO 等。
 
+> **前置依赖（已由 Phase 0 完成）**：C# 层已有 `StorageBuffer` 类（`FNA/src/Graphics/Vertices/StorageBuffer.cs`）及对应 P/Invoke；`FNA3D.h` 公共 API 与 `FNA3D_Driver_SDL.c` 在 `c821adb` 已加入 `GenStorageBuffer` / `SetStorageBufferData` / `GetStorageBufferData` / `SetVertexStorageBuffers` 等实现。Phase 4 只需在此基础上扩展计算管线与计算通道资源绑定。
+
 ### 变更
 
-#### 4.1 FNA3D_Driver.h — 新函数表条目
+#### 4.1 FNA3D_Driver.h — 函数表条目
+
+> 以下函数表条目中，`DispatchCompute` 为 Phase 4 新增；存储缓冲区相关条目已在 Phase 0（`c821adb`）就位，此处列出以确认基线。
 
 ```c
+/* 计算调度（Phase 4 新增） */
 void (*DispatchCompute)(
     FNA3D_Renderer *driverData,
     FNA3D_Effect *effect,
@@ -307,23 +386,65 @@ void (*DispatchCompute)(
     uint32_t threadGroupCountY,
     uint32_t threadGroupCountZ
 );
+
+/* 存储缓冲区（RWStructuredBuffer 等）—— 已在 c821adb 实现 */
+FNA3D_Buffer* (*GenStorageBuffer)(
+    FNA3D_Renderer *driverData,
+    int32_t sizeInBytes,
+    uint8_t vertexWrite,
+    uint8_t vertexRead
+);
+void (*AddDisposeStorageBuffer)(
+    FNA3D_Renderer *driverData,
+    FNA3D_Buffer *buffer
+);
+void (*SetStorageBufferData)(
+    FNA3D_Renderer *driverData,
+    FNA3D_Buffer *buffer,
+    int32_t offsetInBytes,
+    void* data,
+    int32_t dataLength
+);
+void (*GetStorageBufferData)(
+    FNA3D_Renderer *driverData,
+    FNA3D_Buffer *buffer,
+    int32_t offsetInBytes,
+    void* data,
+    int32_t dataLength
+);
+void (*SetVertexStorageBuffers)(
+    FNA3D_Renderer *driverData,
+    FNA3D_Buffer **buffers,
+    int32_t firstSlot,
+    int32_t numBuffers,
+    uint8_t writable
+);
 ```
 
 #### 4.2 FNA3D_Driver_SDL.c — 实现
 
-**在 `SDLGPU_CreateEffect` 中** (约第 3970 行):
-添加计算着色器创建：
+> 当前 `SDLGPU_Effect` 只有 `vertexShaders` / `pixelShaders` 数组，没有计算管线字段；实现本阶段需要先扩展该结构体（例如增加 `SDL_GPUComputePipeline **computePipelines`）。
+
+**在 `SDLGPU_CreateEffect` 中** (约第 3950 行):
+添加计算着色器创建。注意 `FNA3D_Effect` 中所有着色器都存放在同一个 `shaders` 数组里，通过 `stage == FNA3D_SHADERSTAGE_COMPUTE` 识别：
 ```c
-for (i = 0; i < effect->computeShaderCount; i++)
+for (i = 0; i < effect->shaderCount; i++)
 {
-    FNA3D_EffectShader *csInfo = &effect->computeShaders[i];
+    FNA3D_EffectShader *csInfo = &effect->shaders[i];
+    if (csInfo->stage != FNA3D_SHADERSTAGE_COMPUTE)
+    {
+        continue;
+    }
     SDL_GPUComputePipelineCreateInfo createInfo = {0};
     createInfo.code = csInfo->spirvData;
     createInfo.code_size = csInfo->spirvSize;
     createInfo.entrypoint = csInfo->entryPoint;
-    createInfo.num_samplers = max(csInfo->samplerCount, 1);
-    // ... 存储缓冲区/纹理计数 ...
-    effect->sdlComputePipelines[i] = SDL_CreateGPUComputePipeline(
+    createInfo.num_samplers = SDL_max(csInfo->samplerCount, 1);
+    createInfo.num_readonly_storage_buffers = csInfo->readonlyStorageBufferCount;
+    createInfo.num_readonly_storage_textures = csInfo->readonlyStorageTextureCount;
+    createInfo.num_readwrite_storage_buffers = csInfo->readwriteStorageBufferCount;
+    createInfo.num_readwrite_storage_textures = csInfo->readwriteStorageTextureCount;
+    gpuEffect->computePipelines[i] = SDL_CreateGPUComputePipeline(
         renderer->device, &createInfo);
 }
 ```
@@ -337,19 +458,20 @@ static void SDLGPU_DispatchCompute(
     uint32_t tgX, uint32_t tgY, uint32_t tgZ
 ) {
     SDLGPU_Renderer *renderer = (SDLGPU_Renderer*) driverData;
-    SDLGPU_Effect *gpuEffect = (SDLGPU_Effect*) effect;
-    
+    SDLGPU_Effect *gpuEffect = (SDLGPU_Effect*) effect->driverData;
+    FNA3D_EffectShader *cs = &effect->shaders[pass->computeShaderIndex];
+
     SDL_GPUComputePass *computePass = SDL_BeginGPUComputePass(
         renderer->renderCommandBuffer, NULL, 0, NULL, 0);
-    
+
     SDL_BindGPUComputePipeline(computePass,
-        gpuEffect->sdlComputePipelines[pass->computeShaderIndex]);
-    
+        gpuEffect->computePipelines[pass->computeShaderIndex]);
+
     SDL_PushGPUComputeUniformData(renderer->renderCommandBuffer, 0,
         gpuEffect->uniformData, gpuEffect->uniformDataSize);
-    
+
     // 绑定存储缓冲区和纹理...
-    
+
     SDL_DispatchGPUCompute(computePass, tgX, tgY, tgZ);
     SDL_EndGPUComputePass(computePass);
 }
@@ -389,9 +511,11 @@ public void DispatchCompute(Effect effect, EffectPass pass,
 }
 ```
 
-### 测试程序: `ComputeDispatch/`
+### 测试程序: `ComputeDispatch/`（待创建）
 
-**路径**: `../FNA_Test/ComputeDispatch/`
+**路径**: `../FNA_Test/ComputeDispatch/`（当前不存在）
+
+> **注意**：现有 `ComputeShaderEffect/ParticleFire/` 目录名容易混淆，但它使用顶点着色器里的 GPU Instancing 实现粒子动画，**不是**计算着色器示例。
 
 **核心逻辑**:
 1. 加载包含计算着色器 (.hlsl → .spv → .feb) 的 FEB
@@ -428,18 +552,22 @@ ComputeDispatch/
 ## 依赖关系
 
 ```
+Phase 0 (基线对齐：StorageBuffer C 实现 + FEB 修复)  【已完成】
+    ↓
 Phase 1 (可采样深度)
     ↓
 Phase 2 (深度纹理包装) ←── 依赖 Phase 1 的 SAMPLER 标志
     ↓
 Phase 3 (共享深度缓冲区) ←── 依赖 Phase 2 的纹理包装
-    
-Phase 4 (计算着色器) ←── 独立，与其他阶段并行
+
+Phase 4 (计算着色器) ←── 依赖 Phase 0 的 StorageBuffer；可与 Phase 1-3 并行
 ```
 
 ## 构建和测试
 
 ### 构建单个测试
+> 以下命令在目录创建后方可执行；目前 `DepthSampling/`、`DepthTexture/`、`SharedDepth/`、`ComputeDispatch/` 均不存在。
+
 ```bash
 cd ../FNA_Test/DepthSampling
 dotnet build
@@ -462,16 +590,16 @@ ninja -C build
 
 ## 验证清单
 
-| Phase | 测试程序 | 验证内容 | RenderDoc 检查 |
-|-------|---------|---------|---------------|
-| 1 | DepthSampling | 深度缓冲区有 SAMPLER 用法 | `vkCreateImage` 的 usage 标志 |
-| 2 | DepthTexture | DepthStencilTexture 返回有效纹理 | 片段着色器描述符集绑定 |
-| 3 | SharedDepth | 两个通道使用同一深度缓冲区 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
-| 4 | ComputeDispatch | Compute 输出匹配预期 | `vkCmdDispatch` 和存储缓冲区内容 |
+| Phase | 状态 | 测试程序 | 验证内容 | RenderDoc 检查 |
+|-------|------|---------|---------|---------------|
+| 1 | 计划 | DepthSampling | 深度缓冲区有 SAMPLER 用法 | `vkCreateImage` 的 usage 标志 |
+| 2 | 计划 | DepthTexture | DepthStencilTexture 返回有效纹理 | 片段着色器描述符集绑定 |
+| 3 | 计划 | SharedDepth | 两个通道使用同一深度缓冲区 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
+| 4 | 计划 | ComputeDispatch | Compute 输出匹配预期 | `vkCmdDispatch` 和存储缓冲区内容 |
 
-## 回滚到 SceneRenderer 修复
+## 回滚到 SceneRenderer 修复（未来重构方向）
 
-完成 Phase 1-3 后，SceneRenderer 的 Skybox 可以改为 UE5 风格的硬件深度测试：
+> 当前 `SceneRenderer/DESIGN.md` 明确约束 **No compute shaders**，且 SkyboxPass 是 additive 写入 `_hdrSceneRT`，并未使用共享深度缓冲区的硬件深度测试。完成 Phase 1-3 后，可再考虑将 SceneRenderer 的 Skybox 改为 UE5 风格的硬件深度测试：
 
 1. 创建共享 `DepthStencilBuffer`
 2. GBuffer 通道使用此深度缓冲区渲染
