@@ -79,13 +79,23 @@ dxc --version
 
 所有命令都应正常输出版本号。若提示"不是内部或外部命令"，检查该工具的 PATH 配置。
 
+> **注意**：如果系统只安装了 Python 启动器（`py.exe`）而没有 `python.exe`，请使用 `py --version` 验证；后续脚本和命令中的 `python` 可替换为 `py`。
+
 ### 2.3 Python ply 模块
 
 ```bat
-pip install ply
+python -m pip install ply
+```
+
+如果系统只有 `py.exe` 启动器，则改为：
+
+```bat
+py -m pip install ply
 ```
 
 ### 2.4 SDL3 配置
+
+#### 方案 A：官方预编译包（推荐）
 
 1. 从 SDL GitHub Releases 下载 `SDL3-devel-<version>-VC-x64.zip`
 2. 解压到固定目录，例如 `C:\SDL3`
@@ -96,6 +106,25 @@ pip install ply
    ├── lib\x64\SDL3.dll.lib ← 导入库
    └── lib\x64\SDL3.dll     ← 运行时 DLL（需要复制到测试输出目录）
    ```
+
+#### 方案 B：源码 / MinGW 构建
+
+如果你已经从源码构建了 SDL3（例如使用 MinGW），目录结构可能如下：
+
+```
+D:\dev\SDL3\
+├── include\SDL3\           ← 头文件
+└── build\
+    ├── SDL3.dll            ← 运行时 DLL
+    ├── libSDL3.dll.a       ← MinGW 导入库
+    └── SDL3Config.cmake    ← CMake 包配置
+```
+
+此时可通过环境变量指定 SDL3 根目录，无需放到 `C:\SDL3`：
+
+```bat
+set SDL3_DIR=D:\dev\SDL3
+```
 
 > **注意**：必须选择 `x64` 版本。FNA_Test 所有项目面向 `AnyCPU`（实际运行取决于 `dotnet.exe` 的架构），现代 .NET 在 64 位 Windows 上默认为 x64。
 
@@ -134,6 +163,8 @@ FNA3D 是 C 库，通过 CMake 构建。Windows 上推荐使用 Ninja generator�
 
 ### 4.1 配置
 
+#### 使用官方预编译 SDL3（显式路径）
+
 ```bat
 cd FNA\lib\FNA3D
 
@@ -150,6 +181,19 @@ cmake -B build -G Ninja . -DCMAKE_BUILD_TYPE=Release ^
 | `-DCMAKE_BUILD_TYPE=Release` | Release 模式优化 |
 | `-DSDL3_INCLUDE_DIRS` | SDL3 头文件路径（使用正斜杠 `/`） |
 | `-DSDL3_LIBRARIES` | SDL3 导入库完整路径 |
+
+#### 使用源码 / MinGW 构建的 SDL3（CMake 包）
+
+如果 SDL3 是通过 CMake 从源码构建的（例如 `D:\dev\SDL3\build` 目录下已有 `SDL3Config.cmake`），可以直接让 CMake 通过包配置来定位 SDL3：
+
+```bat
+cd FNA\lib\FNA3D
+
+cmake -B build -G Ninja . -DCMAKE_BUILD_TYPE=Release ^
+  -DSDL3_DIR=D:/dev/SDL3/build
+```
+
+> **提示**：MinGW 生成的导入库 `libSDL3.dll.a` 可以像 `SDL3.dll.lib` 一样直接传给 `SDL3_LIBRARIES`；使用 `SDL3_DIR` 方式时 CMake 会自动处理。
 
 ### 4.2 构建
 
@@ -254,7 +298,7 @@ copy *.feb ..\FXB\
 rename ..\FXB\*.feb *.fxb
 ```
 
-> **注意**：`feb_builder.py` 路径为 `../FNA/tools/feb_builder.py`，`dxc.exe` 需在 PATH 上。
+> **注意**：`feb_builder.py` 路径为 `../FNA/tools/feb_builder.py`，`dxc.exe` 需在 PATH 上。如果系统只有 `py.exe`，将上面的 `python` 替换为 `py`。
 
 ### 6.3 构建测试项目 FEB
 
@@ -269,13 +313,15 @@ cd ..\..
 :: StorageBuffer 着色器
 cd StorageBuffer\AsteroidField\Shaders
 python ..\..\..\..\FNA\tools\feb_builder.py AsteroidField.feb.json
-cd ..\..\..
+cd ..\..
 
 :: SceneRenderer 着色器（全部 .feb.json 清单）
 cd SceneRenderer\Shaders
 for %f in (*.feb.json) do python ..\..\..\FNA\tools\feb_builder.py %f
 cd ..\..
 ```
+
+> **提示**：如果系统只有 `py.exe`，将命令中的 `python` 替换为 `py`。
 
 ---
 
@@ -807,6 +853,13 @@ cmake -B build -G Ninja . ^
 run_tests.bat
 ```
 
+脚本会自动检测 Python（优先 `python.exe`，回退到 `py.exe`），并支持通过环境变量 `SDL3_DIR` 指定非默认的 SDL3 路径。当前环境示例：
+
+```bat
+set SDL3_DIR=D:\dev\SDL3
+run_tests.bat --headless
+```
+
 ### 11.1 脚本流程
 
 1. 构建 FNA3D（C 库）
@@ -836,6 +889,10 @@ run_tests.bat --skip-fna3d --skip-feb --skip-fna
 
 :: 仅运行无头测试
 run_tests.bat --headless
+
+:: 使用自定义 SDL3 目录并跳过构建
+set SDL3_DIR=D:\dev\SDL3
+run_tests.bat --skip-fna3d --skip-feb --skip-fna --headless
 ```
 
 ---
