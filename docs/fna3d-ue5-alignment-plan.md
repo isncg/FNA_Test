@@ -4,9 +4,9 @@
 
 目标：修改 FNA3D_HLSL，使其支持 Unreal Engine 5 风格的延迟渲染管线。每一项变更都配有独立的测试程序。
 
-> **状态说明**：本文件为尚未开始的实现计划（当前代码中所有 Phase 1-4 的新 API、测试目录均未创建）。下文的“当前”均指计划实施前的基线代码，引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
+> **状态说明**：Phase 0（基线对齐）与 Phase 1（可采样深度）已完成；Phase 2-4 尚未开始。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
 >
-> **Phase 0（基线对齐）已于 2026-07-31 完成**，详见下文。完成 Phase 0 后，FNA3D 子模块应位于 `c821adb`（`storage buffer api`），所有引用行号也以该提交为准。
+> **Phase 0（基线对齐）已于 2026-07-31 完成**，详见下文。完成 Phase 0 后，FNA3D 子模块应位于 `c821adb`（`storage buffer api`）及其后提交。
 
 ## Phase 0: 基线对齐（已完成）
 
@@ -102,73 +102,59 @@ FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDL_GPUT
 
 ---
 
-## Phase 1: 可采样的深度缓冲区
+## Phase 1: 可采样的深度缓冲区（已完成）
 
 ### 目标
 使深度模板缓冲区可以作为着色器纹理采样（SSAO、软阴影、屏幕空间反射等需要；与像素着色器输出 `SV_Depth` 不同）。
 
-### 变更
+### 实际实现（2026-07-31）
 
-#### 1.1 FNA3D_Driver_SDL.c — 添加 SAMPLER 标志
+与原计划的区别：未直接硬编码 `| SAMPLER`，而是新增内联辅助函数 `SDLGPU_INTERNAL_GetDepthUsageFlags(renderer, format, sampleCount)`，在创建时动态决定用法标志：
 
-**文件**: `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c`
+- 仅当 `sampleCount == 1` 且 `SDL_GPUTextureSupportsFormat(DEPTH_STENCIL_TARGET | SAMPLER)` 为真时返回 `DEPTH_STENCIL_TARGET | SAMPLER`；
+- 否则回退纯 `DEPTH_STENCIL_TARGET`（SDL_GPU 禁止 MSAA 纹理带 SAMPLER 用法；个别 GPU 不支持可采样深度格式）；
+- 该函数直接查询设备而不依赖 `supportsD24*` 标志，因此在 FauxBackbuffer（早于能力检测初始化）中也能正确工作。
 
-**位置 1** — `SDLGPU_GenDepthStencilRenderbuffer` (约第 2956 行，usage 在第 2975 行):
-```c
-// 当前：
-SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+修改点（`../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c`）：
 
-// 改为：
-SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-```
+| 位置 | 修改 |
+|------|------|
+| `XNAToSDL_DepthFormat` 之后 | 新增 `SDLGPU_INTERNAL_GetDepthUsageFlags` 辅助函数 |
+| `SDLGPU_GenDepthStencilRenderbuffer` | usage 改为调用辅助函数 |
+| `SDLGPU_INTERNAL_CreateFauxBackbuffer` 深度分支 | usage 改为调用辅助函数 |
+| `supportsD24` / `supportsD24S8` 能力查询 | 加入 `SAMPLER`，使格式选择偏向可采样格式（不可采样时自动回退 D32_FLOAT 系） |
 
-**位置 2** — `SDLGPU_INTERNAL_CreateFauxBackbuffer` (约第 2657 行，深度 usage 在第 2699 行):
-```c
-// 当前：
-SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+#### 1.2 能力检测（已包含在辅助函数中）
 
-// 改为：
-SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-```
+辅助函数每次创建时查询 `SDL_GPUTextureSupportsFormat`，不支持可采样深度的 GPU 自动回退，无需额外处理。
 
-**位置 3** — 能力查询 (`SDL_GPUTextureSupportsFormat` 第 4943-4954 行):
-```c
-// 更新 uses 标志以包含 SAMPLER：
-SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER
-```
+### 测试程序: `DepthSampling/`（已创建）
 
-#### 1.2 能力检测
+**路径**: `../FNA_Test/DepthSampling/`
 
-在驱动初始化时查询 `SDL_GPUTextureSupportsFormat` 是否需要更新。部分 GPU 可能不支持可采样的深度纹理（极少数情况）。
+**实际测试内容**（深度*采样*需 Phase 2 的纹理包装，本阶段验证新用法标志不破坏深度测试）：
+1. 近处红色方块（z=0.25）+ 远处绿色方块（z=0.75），同心布局（Y 对称，断言不受 Y-flip 影响）
+2. 路径 A：渲染到背板（验证 FauxBackbuffer 深度路径）
+3. 路径 B：渲染到 D24S8 `RenderTarget2D`（验证 `GenDepthStencilRenderbuffer` 路径）
+4. 断言：中心=红（深度测试拒绝了绿）、外环=绿、角落=清除色
 
-### 测试程序: `DepthSampling/`（待创建）
+**验证结果**：
+- headless 运行 `RESULT: DepthSampling PASS`
+- Vulkan 验证层开启下无新增验证错误
+- 回归：BasicEffect / DepthSorting 通过；AsteroidField 的随机失败为既有 flaky（未定种 `Random`）；SceneRenderer 的 `IndexOutOfRangeException`（C# FEB 解析）在 Phase 0/1 DLL 下均存在，为既有问题
+- RenderDoc 确认 `vkCreateImage` 带 SAMPLED_BIT（待人工抽查）
 
-**路径**: `../FNA_Test/DepthSampling/`（当前不存在）
-
-**核心逻辑**:
-1. 创建一个带有 `DepthFormat.Depth24Stencil8` 的 `RenderTarget2D`
-2. 渲染一个三角形（深度值 0.5）
-3. 将深度缓冲区包装为纹理（当前不可用，需 Phase 2）
-4. 在第二个全屏通道中对深度纹理进行采样
-5. 回读并验证深度值
-
-**验证**:
-- 在 RenderDoc 中确认深度纹理具有 `SAMPLER` 用法
-- 确认无 Vulkan 验证错误
-- headless：验证深度纹理的像素值（需要 Phase 2 的纹理包装）
-
-**文件**:
+**实际文件**：
 ```
 DepthSampling/
   DepthSampling.csproj
-  Program.cs
-  Shaders/DepthFill_vs.hlsl
-  Shaders/DepthFill_ps.hlsl     # 输出 SV_Depth
-  Shaders/DepthSample_vs.hlsl   # 全屏三角形
-  Shaders/DepthSample_ps.hlsl   # 采样深度纹理，输出到颜色
-  Shaders/DepthFill.feb.json
-  Shaders/DepthSample.feb.json
+  Program.cs                     # 双路径深度测试 + headless 断言
+  Shaders/DepthQuad_vs.hlsl      # clip-space 直通（PC 布局，C1-C5）
+  Shaders/DepthQuad_ps.hlsl      # 顶点色输出
+  Shaders/DepthQuad.feb.json
 ```
+
+已注册到 `run_tests.sh` / `run_tests.bat`。
 
 ---
 
@@ -554,7 +540,7 @@ ComputeDispatch/
 ```
 Phase 0 (基线对齐：StorageBuffer C 实现 + FEB 修复)  【已完成】
     ↓
-Phase 1 (可采样深度)
+Phase 1 (可采样深度)  【已完成】
     ↓
 Phase 2 (深度纹理包装) ←── 依赖 Phase 1 的 SAMPLER 标志
     ↓
@@ -566,7 +552,7 @@ Phase 4 (计算着色器) ←── 依赖 Phase 0 的 StorageBuffer；可与 Ph
 ## 构建和测试
 
 ### 构建单个测试
-> 以下命令在目录创建后方可执行；目前 `DepthSampling/`、`DepthTexture/`、`SharedDepth/`、`ComputeDispatch/` 均不存在。
+> `DepthTexture/`、`SharedDepth/`、`ComputeDispatch/` 待对应 Phase 实施时创建；`DepthSampling/` 已存在。
 
 ```bash
 cd ../FNA_Test/DepthSampling
@@ -592,7 +578,7 @@ ninja -C build
 
 | Phase | 状态 | 测试程序 | 验证内容 | RenderDoc 检查 |
 |-------|------|---------|---------|---------------|
-| 1 | 计划 | DepthSampling | 深度缓冲区有 SAMPLER 用法 | `vkCreateImage` 的 usage 标志 |
+| 1 | 完成 | DepthSampling | 深度缓冲区有 SAMPLER 用法；双路径深度测试正常 | `vkCreateImage` 的 usage 标志 |
 | 2 | 计划 | DepthTexture | DepthStencilTexture 返回有效纹理 | 片段着色器描述符集绑定 |
 | 3 | 计划 | SharedDepth | 两个通道使用同一深度缓冲区 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
 | 4 | 计划 | ComputeDispatch | Compute 输出匹配预期 | `vkCmdDispatch` 和存储缓冲区内容 |

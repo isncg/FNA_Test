@@ -1,0 +1,15 @@
+{
+  "techniques": [
+    {
+      "name": "DepthQuad",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "DepthQuad_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "DepthQuad_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}

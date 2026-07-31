@@ -2,8 +2,9 @@
 REM run_tests.bat — Build and run all FNA_Test projects on Windows.
 REM Usage: run_tests.bat [--skip-fna3d] [--skip-feb] [--skip-fna] [--headless] [--help]
 REM
-REM Requires: CMake, Ninja, MSVC (VS 2022), .NET 10 SDK, Python 3, DXC, Git
+REM Requires: CMake, Ninja, .NET 10 SDK, Python 3 (or py launcher), DXC, Git
 REM SDL3 expected at C:\SDL3 (override via SDL3_DIR environment variable)
+REM Supports both MSVC-prebuilt SDL3 (VC-x64) and source/MinGW SDL3 builds
 
 setlocal enabledelayedexpansion
 
@@ -34,7 +35,7 @@ echo   --skip-fna      Skip FNA (C# library) build
 echo   --headless      Only run tests in headless mode (no window)
 echo   --help          Show this help message
 echo.
-echo SDL3 path: %SDL3_DIR% (set SDL3_DIR to override default C:\SDL3)
+echo SDL3 path: (default C:\SDL3, set SDL3_DIR to override)
 exit /b 0
 
 :args_done
@@ -47,11 +48,41 @@ set FEB_SRC=%FNA_DIR%\src\Graphics\Effect\StockEffects\HLSL_DXC
 set FEB_DST=%FNA_DIR%\src\Graphics\Effect\StockEffects\FXB
 set FNA3D_BUILD=%FNA_DIR%\lib\FNA3D\build
 
+REM Python command (prefer %PYTHON%, then python.exe, then py launcher)
+if not "%PYTHON%"=="" (
+    set PYTHON_CMD=%PYTHON%
+) else (
+    where python >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        set PYTHON_CMD=python
+    ) else (
+        where py >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            set PYTHON_CMD=py
+        ) else (
+            echo [WARNING] Neither python.exe nor py.exe found. FEB build will fail.
+            set PYTHON_CMD=python
+        )
+    )
+)
+
 REM SDL3 path (default C:\SDL3, override via environment variable)
 if "%SDL3_DIR%"=="" set SDL3_DIR=C:\SDL3
+
+REM Try the official prebuilt VC-x64 layout first
 set SDL3_INC=%SDL3_DIR%\include
 set SDL3_LIB=%SDL3_DIR%\lib\x64\SDL3.dll.lib
 set SDL3_DLL=%SDL3_DIR%\lib\x64\SDL3.dll
+set SDL3_CMAKE_MODE=EXPLICIT
+
+REM Fall back to a source/MinGW build layout (e.g. D:\dev\SDL3 with build\)
+if not exist "%SDL3_LIB%" (
+    if exist "%SDL3_DIR%\build\libSDL3.dll.a" (
+        set SDL3_LIB=%SDL3_DIR%\build\libSDL3.dll.a
+        set SDL3_DLL=%SDL3_DIR%\build\SDL3.dll
+        set SDL3_CMAKE_MODE=CONFIG
+    )
+)
 
 REM DXC on PATH check
 where dxc >nul 2>&1
@@ -86,20 +117,34 @@ if %SKIP_FNA3D% equ 1 (
 echo === Step 1: Build FNA3D (C library) ===
 
 REM Check if SDL3 directory exists
-if not exist "%SDL3_INC%" (
-    echo [ERROR] SDL3 headers not found at %SDL3_INC%
-    echo         Download SDL3-devel-VC-x64.zip from https://github.com/libsdl-org/SDL/releases
-    echo         and extract to C:\SDL3, or set SDL3_DIR environment variable.
-    exit /b 1
+if "%SDL3_CMAKE_MODE%"=="EXPLICIT" (
+    if not exist "%SDL3_INC%\SDL3\SDL.h" (
+        echo [ERROR] SDL3 headers not found at %SDL3_INC%\SDL3
+        echo         Download SDL3-devel-VC-x64.zip from https://github.com/libsdl-org/SDL/releases
+        echo         and extract to C:\SDL3, or set SDL3_DIR environment variable.
+        exit /b 1
+    )
+) else (
+    if not exist "%SDL3_DIR%\build\SDL3Config.cmake" (
+        echo [ERROR] SDL3 CMake config not found at %SDL3_DIR%\build\SDL3Config.cmake
+        echo         Build SDL3 from source first, or set SDL3_DIR to a prebuilt SDL3 root.
+        exit /b 1
+    )
 )
 
 REM Configure if build directory doesn't exist
 if not exist "%FNA3D_BUILD%\build.ninja" (
     echo   Configuring CMake...
-    cmake -B "%FNA3D_BUILD%" -G Ninja "%FNA_DIR%\lib\FNA3D" ^
-        -DCMAKE_BUILD_TYPE=Release ^
-        -DSDL3_INCLUDE_DIRS=%SDL3_INC:\=/% ^
-        -DSDL3_LIBRARIES=%SDL3_LIB:\=/%
+    if "%SDL3_CMAKE_MODE%"=="EXPLICIT" (
+        cmake -B "%FNA3D_BUILD%" -G Ninja "%FNA_DIR%\lib\FNA3D" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DSDL3_INCLUDE_DIRS=%SDL3_INC:\=/% ^
+            -DSDL3_LIBRARIES=%SDL3_LIB:\=/%
+    ) else (
+        cmake -B "%FNA3D_BUILD%" -G Ninja "%FNA_DIR%\lib\FNA3D" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DSDL3_DIR=%SDL3_DIR:\=/%/build
+    )
     if !ERRORLEVEL! neq 0 (
         echo [ERROR] CMake configure failed.
         exit /b 1
@@ -135,7 +180,7 @@ if not exist "%FEB_SRC%" (
 pushd "%FEB_SRC%"
 for %%e in (BasicEffect AlphaTestEffect DualTextureEffect SkinnedEffect SpriteEffect EnvironmentMapEffect) do (
     echo   Building %%e...
-    python "%FEB_BUILDER%" "%%e.feb.json" >nul 2>&1
+    %PYTHON_CMD% "%FEB_BUILDER%" "%%e.feb.json" >nul 2>&1
     if !ERRORLEVEL! neq 0 (
         echo   [WARN] %%e FEB build failed
     ) else (
@@ -187,7 +232,7 @@ REM SDF font shader
 if exist "%SCRIPT_DIR%SDFFontTest\Shaders\SDFText.feb.json" (
     echo   Building SDF text shader FEB...
     pushd "%SCRIPT_DIR%SDFFontTest\Shaders"
-    python "%FEB_BUILDER%" SDFText.feb.json >nul 2>&1
+    %PYTHON_CMD% "%FEB_BUILDER%" SDFText.feb.json >nul 2>&1
     if !ERRORLEVEL! neq 0 echo   [WARN] SDFText FEB build failed
     popd
 )
@@ -196,8 +241,17 @@ REM StorageBuffer shader
 if exist "%SCRIPT_DIR%StorageBuffer\AsteroidField\Shaders\AsteroidField.feb.json" (
     echo   Building StorageBuffer shader FEB...
     pushd "%SCRIPT_DIR%StorageBuffer\AsteroidField\Shaders"
-    python "%FEB_BUILDER%" AsteroidField.feb.json >nul 2>&1
+    %PYTHON_CMD% "%FEB_BUILDER%" AsteroidField.feb.json >nul 2>&1
     if !ERRORLEVEL! neq 0 echo   [WARN] AsteroidField FEB build failed
+    popd
+)
+
+REM DepthSampling shader (FNA3D UE5 alignment Phase 1)
+if exist "%SCRIPT_DIR%DepthSampling\Shaders\DepthQuad.feb.json" (
+    echo   Building DepthSampling shader FEB...
+    pushd "%SCRIPT_DIR%DepthSampling\Shaders"
+    %PYTHON_CMD% "%FEB_BUILDER%" DepthQuad.feb.json >nul 2>&1
+    if !ERRORLEVEL! neq 0 echo   [WARN] DepthQuad FEB build failed
     popd
 )
 
@@ -206,7 +260,7 @@ if exist "%SCRIPT_DIR%SceneRenderer\Shaders\" (
     echo   Building SceneRenderer FEBs...
     pushd "%SCRIPT_DIR%SceneRenderer\Shaders"
     for %%f in (*.feb.json) do (
-        python "%FEB_BUILDER%" "%%f" >nul 2>&1
+        %PYTHON_CMD% "%FEB_BUILDER%" "%%f" >nul 2>&1
         if !ERRORLEVEL! neq 0 echo   [WARN] %%f FEB build failed
     )
     popd
@@ -306,6 +360,7 @@ call :run_test GPUInstancing TrailEffectCapture
 REM ─── Top-level tests ───────────────────────────────────────────────
 call :run_test "" JFAOutline
 call :run_test "" SDFFontTest
+call :run_test "" DepthSampling
 
 REM ─── SceneRenderer (deferred PBR pipeline) ─────────────────────────
 call :run_test "" SceneRenderer
