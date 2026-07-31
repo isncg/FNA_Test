@@ -29,6 +29,14 @@ class Program : Game
     private int _teapotMat;
     private int _floorMat;
 
+    /* Direct references instead of Objects[0]/[1]/[2]: the teapot is only added
+     * when its model file exists, and index-based lookups then silently shift
+     * every material onto the wrong object.
+     */
+    private SceneObject? _teapotObj;
+    private SceneObject? _floorObj;
+    private SceneObject? _sphereObj;
+
     // Headless skybox/shared-depth verification state
     private int _headlessFrame;
     private Color[]? _skyOnPixels;
@@ -82,6 +90,12 @@ class Program : Game
         // ── Teapot ──────────────────────────────────────────────────────────
         string[] teapotCandidates =
         {
+            Path.Combine(AppContext.BaseDirectory, "assets", "models", "teapot_bezier0.tris"),
+            "../assets/models/teapot_bezier0.tris",
+            "../../assets/models/teapot_bezier0.tris",
+            "../../../assets/models/teapot_bezier0.tris",
+            "../../../../assets/models/teapot_bezier0.tris",
+            // Legacy location from before this repo was renamed to FNA_Test
             "../../FNA3D_HLSL_Test/assets/models/teapot_bezier0.tris",
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
                 "FNA3D_HLSL_Test", "assets", "models", "teapot_bezier0.tris"),
@@ -111,6 +125,20 @@ class Program : Game
                 },
                 Position = new Vector3(0, -teapotYMin, 0),
             });
+            _teapotObj = _scene.Objects[_scene.Objects.Count - 1];
+        }
+        else
+        {
+            /* Without this warning the teapot is silently absent, and any
+             * index-based material assignment silently shifts onto the wrong
+             * object.
+             */
+            Console.WriteLine("[WARN] Teapot model not found; the scene will " +
+                "have no teapot. Searched:");
+            foreach (var c in teapotCandidates)
+            {
+                Console.WriteLine($"         {Path.GetFullPath(c)}");
+            }
         }
 
         // ── Floor ────────────────────────────────────────────────────────────
@@ -132,6 +160,7 @@ class Program : Game
                 Bounds = new BoundingSphere(Vector3.Zero, 12f),
             },
         });
+        _floorObj = _scene.Objects[_scene.Objects.Count - 1];
 
         // ── Procedural spheres ──────────────────────────────────────────────
         var sphereVerts = CreateSpherePNT(0.5f, 24, 16);
@@ -153,6 +182,7 @@ class Program : Game
             },
             Position = new Vector3(2.5f, 0.5f, 1.5f),
         });
+        _sphereObj = _scene.Objects[_scene.Objects.Count - 1];
 
         // ── Lights ──────────────────────────────────────────────────────────
         _scene.SunLight = new DirectionalLight
@@ -218,12 +248,11 @@ class Program : Game
         _teapotMat = 2; // metal
 
         // Link materials to objects
-        if (_scene.Objects.Count > 0)
-            _scene.Objects[0].Material = _scene.MaterialPalette[_teapotMat]; // teapot
-        if (_scene.Objects.Count > 1)
-            _scene.Objects[1].Material = _scene.MaterialPalette[_floorMat];  // floor
-        if (_scene.Objects.Count > 2)
-            _scene.Objects[2].Material = _scene.MaterialPalette[1];          // sphere
+        ApplyMaterials();
+        if (_sphereObj != null && _scene.MaterialPalette.Count > 1)
+        {
+            _sphereObj.Material = _scene.MaterialPalette[1];
+        }
 
         // ── HDRI ────────────────────────────────────────────────────────────
         var hdriDir = Path.Combine(assetsBase, "hdris");
@@ -324,14 +353,18 @@ class Program : Game
             ImGuiBindings.ImGui_Separator();
             ImGuiBindings.ImGui_Text("Materials");
             var matNames = _materialDirs.Select(Path.GetFileName).ToArray()!;
-            ImGuiBindings.Combo("Teapot", ref _teapotMat, matNames);
+            if (_teapotObj != null)
+            {
+                ImGuiBindings.Combo("Teapot", ref _teapotMat, matNames);
+            }
+            else
+            {
+                ImGuiBindings.ImGui_Text("Teapot: model not loaded");
+            }
             ImGuiBindings.Combo("Floor", ref _floorMat, matNames);
 
             // Update material assignments
-            if (_scene.Objects.Count > 0 && _teapotMat < _scene.MaterialPalette.Count)
-                _scene.Objects[0].Material = _scene.MaterialPalette[_teapotMat];
-            if (_scene.Objects.Count > 1 && _floorMat < _scene.MaterialPalette.Count)
-                _scene.Objects[1].Material = _scene.MaterialPalette[_floorMat];
+            ApplyMaterials();
 
             ImGuiBindings.ImGui_Separator();
             ImGuiBindings.ImGui_Text("SSAO");
@@ -483,7 +516,26 @@ class Program : Game
         }
     }
 
-    // ── Geometry helpers ────────────────────────────────────────────────────
+    // ── Materials ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Binds the selected palette entries to the teapot and floor. Keyed on the
+    /// object references, so a missing teapot cannot shift the floor's material
+    /// onto the sphere.
+    /// </summary>
+    private void ApplyMaterials()
+    {
+        if (_teapotObj != null && _teapotMat < _scene.MaterialPalette.Count)
+        {
+            _teapotObj.Material = _scene.MaterialPalette[_teapotMat];
+        }
+        if (_floorObj != null && _floorMat < _scene.MaterialPalette.Count)
+        {
+            _floorObj.Material = _scene.MaterialPalette[_floorMat];
+        }
+    }
+
+    // ── Geometry helpers ─────────────────────────────────────────────
 
     private static TeapotModel.Vertex[] CreateFloor(float halfSize, int tileCount)
     {
