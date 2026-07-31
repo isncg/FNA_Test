@@ -4,7 +4,7 @@
 
 目标：修改 FNA3D_HLSL，使其支持 Unreal Engine 5 风格的延迟渲染管线。每一项变更都配有独立的测试程序。
 
-> **状态说明**：Phase 0（基线对齐）、Phase 1（可采样深度）、Phase 2（深度纹理包装）已完成；Phase 3-4 尚未开始。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
+> **状态说明**：Phase 0（基线对齐）、Phase 1（可采样深度）、Phase 2（深度纹理包装）、Phase 3（共享深度）已完成；Phase 4 尚未开始。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
 >
 > **Phase 0（基线对齐）已于 2026-07-31 完成**，详见下文。完成 Phase 0 后，FNA3D 子模块应位于 `c821adb`（`storage buffer api`）及其后提交。
 
@@ -141,7 +141,7 @@ FNA3D_Renderbuffer* ─ SDLGPU_Renderbuffer ───────── SDL_GPUT
 **验证结果**：
 - headless 运行 `RESULT: DepthSampling PASS`
 - Vulkan 验证层开启下无新增验证错误
-- 回归：BasicEffect / DepthSorting 通过；AsteroidField 的随机失败为既有 flaky（未定种 `Random`）；SceneRenderer 的 `IndexOutOfRangeException`（C# FEB 解析）在 Phase 0/1 DLL 下均存在，为既有问题
+- 回归：BasicEffect / DepthSorting 通过；AsteroidField 的随机失败为既有 flaky（未定种 `Random`）；JFAOutline / SceneRenderer 的 effect 加载失败为既有问题，根因已查清并修复（见末尾“FEB param 布局遗留问题”）
 - RenderDoc 确认 `vkCreateImage` 带 SAMPLED_BIT（待人工抽查）
 
 **实际文件**：
@@ -220,87 +220,96 @@ DepthTexture/
 
 ---
 
-## Phase 3: 共享深度缓冲区
+## Phase 3: 共享深度缓冲区（已完成）
 
 ### 目标
 允许不同的 `RenderTarget2D` 共享同一个深度缓冲区。这是 UE5 延迟渲染的核心——所有通道重用同一个深度缓冲区。
 
-### 变更
+### 实际实现（2026-07-31）
+
+**重要发现：无需修改 C 驱动与 `GraphicsDevice`。** 现有 `GraphicsDevice.SetRenderTargets` 已从 `renderTargets[0]` 的 `IRenderTarget.DepthStencilBuffer` 取深度，驱动侧 `SDLGPU_SetRenderTargets` 直接使用 `renderbuffer->textureHandle`；不清除时用 `SDL_GPU_LOADOP_LOAD` 且 `cycle = false`，深度内容天然跳过通道保留。因此只需让 `RenderTarget2D` 持有外部深度句柄，共享即生效——**也就绕开了原计划 3.3 担心的 `SetRenderTargets` 重载歧义问题**。
 
 #### 3.1 新类: DepthStencilBuffer
 
-**文件**: `../FNA/src/Graphics/DepthStencilBuffer.cs` (新建)
+**文件**: `../FNA/src/Graphics/DepthStencilBuffer.cs`（新建，已注册到 `FNA.Core.csproj`）
+
+继承 `GraphicsResource`（而非计划中的 `IDisposable`），与 `StorageBuffer` 一致：
 
 ```csharp
-public class DepthStencilBuffer : IDisposable
+public class DepthStencilBuffer : GraphicsResource
 {
-    internal IntPtr Handle; // FNA3D_Renderbuffer*
-    public int Width, Height;
-    public DepthFormat Format;
-    
-    public DepthStencilBuffer(GraphicsDevice device, int width, int height, DepthFormat format);
-    public Texture2D GetTexture(); // 通过 Phase 2 API 包装为纹理
-    public void Dispose();
+    internal IntPtr buffer;      // FNA3D_Renderbuffer*
+    public int Width { get; }
+    public int Height { get; }
+    public DepthFormat Format { get; }
+    public int MultiSampleCount { get; }
+
+    public DepthStencilBuffer(GraphicsDevice, int width, int height, DepthFormat format);
+    public DepthStencilBuffer(GraphicsDevice, int width, int height, DepthFormat format,
+        int preferredMultiSampleCount);
+    public Texture2D GetTexture();   // 复用 Phase 2 API，句柄由本类拥有
 }
 ```
+
+- `DepthFormat.None` 抛 `ArgumentException`；
+- `Dispose` 先释放 `GetTexture()` 的包装纹理再释放 renderbuffer。
 
 #### 3.2 RenderTarget2D 修改
 
-添加一个新的构造函数，接受外部深度缓冲区：
+新增两个接收外部深度的构造函数：
 
 ```csharp
-public RenderTarget2D(GraphicsDevice device, int width, int height,
-    bool mipMap, SurfaceFormat format, DepthStencilBuffer depthStencilBuffer)
-{
-    // 使用外部深度缓冲区
-    this.glDepthStencilBuffer = depthStencilBuffer.Handle;
-    this._isExternalDepth = true;
-    // 正常创建颜色纹理...
-}
+// usage 默认 PreserveContents（原因见下文“关键约束”）
+public RenderTarget2D(GraphicsDevice, int width, int height, bool mipMap,
+    SurfaceFormat preferredFormat, DepthStencilBuffer depthStencilBuffer);
+
+public RenderTarget2D(GraphicsDevice, int width, int height, bool mipMap,
+    SurfaceFormat preferredFormat, DepthStencilBuffer depthStencilBuffer,
+    RenderTargetUsage usage);
 ```
 
-#### 3.3 GraphicsDevice 修改
+- 新增私有字段 `DepthStencilBuffer externalDepth`（而非计划中的 `bool _isExternalDepth`，保留引用才能委派 `GetTexture()`）；
+- `DepthStencilFormat` / `MultiSampleCount` 从共享缓冲区继承（颜色附件的 sample count 必须与深度一致）；
+- 构造时校验共享缓冲区尺寸不小于 RT；
+- `DepthStencilTexture` 属性在外部深度时委派给 `externalDepth.GetTexture()`，避免产生多个包装句柄；
+- `Dispose` **不**释放外部深度。
 
-添加 `SetRenderTargets` 重载，接受外部深度：
+#### 3.3 GraphicsDevice：无需修改
 
-```csharp
-public void SetRenderTargets(
-    DepthStencilBuffer depthBuffer,
-    params RenderTargetBinding[] renderTargets)
-{
-    // 使用提供的深度缓冲区调用 FNA3D_SetRenderTargets
-}
-```
+原计划的 `SetRenderTargets(DepthStencilBuffer, params ...)` 重载已取消：深度由 RT 自身携带，无需新 API，也不存在重载歧义风险。
 
-> 注意 C# 重载解析：该签名与现有的 `SetRenderTargets(params RenderTargetBinding[])` 在传入 `null` 或数组时可能产生歧义，实际实现时可改为 `SetRenderTargets(DepthStencilBuffer, RenderTargetBinding[])`（不含 `params`）或新增独立方法名。
+### 关键约束（实现中发现）
 
-### 测试程序: `SharedDepth/`（待创建）
+**共享深度的 RT 必须用 `RenderTargetUsage.PreserveContents`**。默认的 `DiscardContents` 会让 `SetRenderTargets` 在每次绑定时执行 `Clear(Target | DepthBuffer | Stencil)`，直接抹掉共享深度。因此新构造函数默认 `PreserveContents`，后续通道应只 `Clear(ClearOptions.Target, ...)` 单独清颜色。
 
-**路径**: `../FNA_Test/SharedDepth/`（当前不存在）
+### 测试程序: `SharedDepth/`（已创建）
 
-**核心逻辑**:
-1. 创建 `DepthStencilBuffer` (D24S8)
-2. 创建 `RT1`（颜色，使用共享深度）→ 渲染 3D 几何体
-3. 创建 `RT2`（颜色，使用**相同深度**）→ 渲染天空盒/全屏通道，启用深度测试
-4. 验证几何体区域被正确遮挡（天空只出现在空白区域）
+**路径**: `../FNA_Test/SharedDepth/`
 
-**验证**:
-- 几何体像素 ≠ 天空颜色（天空被深度测试正确拒绝）
-- 空白像素 = 天空颜色
-- 在 RenderDoc 中验证两个通道使用相同的深度附件
+**实际测试内容**：
+1. 创建 `DepthStencilBuffer`（D24S8, 256×256）+ RT1、RT2 两个颜色目标共享它
+2. Pass 1 → RT1：清颜色+深度，绘近处方块（z=0.25）
+3. Pass 2 → RT2：**只清颜色**，绘全屏“天空”（z=0.75）并开启深度测试
+4. 断言：RT2 中心 = RT2 清除色（天空被共享深度拒绝）、RT2 外环/角落 = 天空色、RT1 中心 = 几何体色；兼验 `sharedDepth.GetTexture() != null`（Phase 2 互通）
 
-**文件**:
+**负对照（`--no-share`）**：该开关让 RT2 使用自己的深度缓冲区，此时测试**必须失败**，用以证明断言真的在检验共享而非空过。实测：共享时 PASS，`--no-share` 时 2 处失败（外环与角落未绘出天空）。
+
+**验证结果**：
+- headless 运行 `RESULT: SharedDepth PASS`；Vulkan 验证层无错误
+- 回归：DepthSampling / DepthTexture / BasicEffect / DepthSorting / AsteroidField / JFAOutline / SDFFontTest / TrailEffect / TrailEffectCapture / ParticleFire 均 PASS（JFAOutline 与 SDFFontTest 经 FEB 修复后恢复，见末尾章节）
+- RenderDoc 验证两个通道使用同一 `VkImageView`（待人工抽查）
+
+**实际文件**（天空与几何体共用一个 shader，比计划少一组）：
 ```
 SharedDepth/
   SharedDepth.csproj
-  Program.cs
-  Shaders/Geometry_vs.hlsl
-  Shaders/Geometry_ps.hlsl     # 简单颜色输出
-  Shaders/Fullscreen_vs.hlsl
-  Shaders/Fullscreen_ps.hlsl   # 天空颜色
+  Program.cs                   # 双 RT 共享深度 + --no-share 负对照
+  Shaders/Geometry_vs.hlsl     # clip-space 直通（PC 布局）
+  Shaders/Geometry_ps.hlsl     # 顶点色输出
   Shaders/Geometry.feb.json
-  Shaders/Fullscreen.feb.json
 ```
+
+已注册到 `run_tests.sh` / `run_tests.bat`。
 
 ---
 
@@ -499,7 +508,7 @@ Phase 1 (可采样深度)  【已完成】
     ↓
 Phase 2 (深度纹理包装) 【已完成】←── 依赖 Phase 1 的 SAMPLER 标志
     ↓
-Phase 3 (共享深度缓冲区) ←── 依赖 Phase 2 的纹理包装
+Phase 3 (共享深度缓冲区) 【已完成】←── 依赖 Phase 2 的纹理包装
 
 Phase 4 (计算着色器) ←── 依赖 Phase 0 的 StorageBuffer；可与 Phase 1-3 并行
 ```
@@ -507,7 +516,7 @@ Phase 4 (计算着色器) ←── 依赖 Phase 0 的 StorageBuffer；可与 Ph
 ## 构建和测试
 
 ### 构建单个测试
-> `SharedDepth/`、`ComputeDispatch/` 待对应 Phase 实施时创建；`DepthSampling/`、`DepthTexture/` 已存在。
+> `ComputeDispatch/` 待 Phase 4 实施时创建；`DepthSampling/`、`DepthTexture/`、`SharedDepth/` 已存在。
 
 ```bash
 cd ../FNA_Test/DepthSampling
@@ -535,7 +544,7 @@ ninja -C build
 |-------|------|---------|---------|---------------|
 | 1 | 完成 | DepthSampling | 深度缓冲区有 SAMPLER 用法；双路径深度测试正常 | `vkCreateImage` 的 usage 标志 |
 | 2 | 完成 | DepthTexture | DepthStencilTexture 返回有效纹理；采样值匹配写入深度 | 片段着色器描述符集绑定 |
-| 3 | 计划 | SharedDepth | 两个通道使用同一深度缓冲区 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
+| 3 | 完成 | SharedDepth | 两个通道使用同一深度缓冲区；`--no-share` 负对照失败 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
 | 4 | 计划 | ComputeDispatch | Compute 输出匹配预期 | `vkCmdDispatch` 和存储缓冲区内容 |
 
 ## 回滚到 SceneRenderer 修复（未来重构方向）
@@ -547,3 +556,55 @@ ninja -C build
 3. DepthFill 通道将深度写入 HDR RT（也使用同一共享深度）
 4. DeferredLighting 渲染到 HDR RT（深度测试关闭）
 5. Skybox 渲染到 HDR RT，启用 `DepthBufferFunction.LessEqual` 深度测试
+
+> **注意**：当前 SceneRenderer 除 effect 加载外尚有其他既有缺陷（见下节），上述重构应在那些问题解决后再进行。
+
+---
+
+## FEB param 布局遗留问题（2026-07-31 排查并修复）
+
+与 UE5 对齐无关，但阻碍了 Phase 1-3 的完整回归，故记录于此。
+
+### 症状
+
+- `JFAOutline`：`FNA3D_CreateEffect` 内 native 访问冲突（`0xC0000005`）
+- `SceneRenderer`：C# `Effect.INTERNAL_parseEffect` 抛 `IndexOutOfRangeException`
+
+两者均在 Phase 0 基线 DLL 下同样失败，确认与 Phase 1-3 无关。
+
+### 根因
+
+`FNA/tools/feb_builder.py` 的提交 `4c5f015`（FEB v2 升级）将 **param 条目从 88 字节改为 84 字节**，但未重建已有的 FEB。C 解析器按 `84 + annotationCount * 40` 逐个顺序读取，遇到 88 字节条目会累计错位 4 字节，字符串偏移变成垃圾值。
+
+> 注意：shader 条目（52 字节）和 header version（=2）都是新的，只有 param 条目遗留，因此仅看版本号会误判为正常。判定方法：`(tech_off - param_off) / paramCount`，84 为正常，88 为遗留。
+
+当时仓库内 **29 个 FEB 为 88 字节**（涉及 JFAOutline、SceneRenderer、MaterialLib、SDFFontTest、Gui、ParticleEffect、GPUInstancing）；零参数的 FEB 与已重建的 AsteroidField 不受影响。
+
+### 连带修复的工具链 bug
+
+`feb_builder.py` 两处文本 `open()` 未指定编码，中文 Windows 默认 GBK，遇到 HLSL / manifest 中的非 ASCII 字符（如 `—`、`’`）即 `UnicodeDecodeError` —— 这正是这些 FEB 一直无法在 Windows 上重建的原因。已加 `encoding="utf-8"`。
+
+### 结果
+
+重建全部 29 个 FEB 后格式检查无遗留：
+
+| 测试 | 修复前 | 修复后 |
+|------|--------|--------|
+| JFAOutline | native 访问冲突 | ✅ PASS |
+| SDFFontTest | — | ✅ PASS |
+| TrailEffect / TrailEffectCapture / ParticleFire | — | ✅ PASS（无回归） |
+| SceneRenderer | effect 解析越界 | ⚠️ 越过解析，但崩在其他位置 |
+
+### SceneRenderer 剩余问题（未修复，已确认非本项目引入）
+
+SceneRenderer 现在能完成 effect 加载与 IBL 预计算，但在 draw 调用中 native 崩溃。已取得的证据：
+
+- Phase 0 基线 DLL 下同样崩溃（位置为 SkyboxPass），确认为既有问题
+- 崩溃点在同一 DLL 多次运行间漂移（ShadowMapPass / DeferredLightingPass），而 SceneRenderer 代码无随机数 → 指向内存/生命周期问题
+- 零 Vulkan 验证层报错 → 在到达 Vulkan 之前就挂了，像是空/悬垂的 SDL_GPU 句柄
+- 已排除：管线创建失败（无 `Failed to create graphics pipeline` 日志）、uniform 越界（native `SetEffectParamValueByHandle` 会按 `FNA3D_GetParamSize` 截断并告警）、资源池稳态回收（仅尺寸变化时释放）
+- **领先假设**：已 `Dispose` 的纹理仍留在驱动的 `fragmentTextureSamplerBindings` 中（`SDLGPU_VerifySampler` 存的是裸 `SDL_GPUTexture*`，而 `SDL_ReleaseGPUTexture` 是立即释放），下次 draw 解引用已释放指针。需 native 调试器或在 `VerifySampler` / `FreeTextureHandle` 加日志才能定论。
+
+### 另一个独立缺陷：数组型 effect 参数未支持
+
+`SceneRenderer/Shaders/DeferredLighting.feb.json` 为 `LightData` 声明了 `"count": 64`，但 **FEB 格式、feb_builder、C/C# 解析器三方都没有 count 字段**，`FNA3D_EffectParam.currentValue` 也只有 16 个 float。native 写入会静默截断到 16 字节，即 `LightData[64]` 实际只有第一个 float4 生效 —— 不是崩溃原因（有截断保护），但意味着多光源照明目前不正确，属独立待办。

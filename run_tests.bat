@@ -266,6 +266,15 @@ if exist "%SCRIPT_DIR%DepthTexture\Shaders\DepthFill.feb.json" (
     popd
 )
 
+REM SharedDepth shader (FNA3D UE5 alignment Phase 3)
+if exist "%SCRIPT_DIR%SharedDepth\Shaders\Geometry.feb.json" (
+    echo   Building SharedDepth shader FEB...
+    pushd "%SCRIPT_DIR%SharedDepth\Shaders"
+    %PYTHON_CMD% "%FEB_BUILDER%" Geometry.feb.json >nul 2>&1
+    if !ERRORLEVEL! neq 0 echo   [WARN] Geometry FEB build failed
+    popd
+)
+
 REM SceneRenderer shaders
 if exist "%SCRIPT_DIR%SceneRenderer\Shaders\" (
     echo   Building SceneRenderer FEBs...
@@ -373,6 +382,7 @@ call :run_test "" JFAOutline
 call :run_test "" SDFFontTest
 call :run_test "" DepthSampling
 call :run_test "" DepthTexture
+call :run_test "" SharedDepth
 
 REM ─── SceneRenderer (deferred PBR pipeline) ─────────────────────────
 call :run_test "" SceneRenderer

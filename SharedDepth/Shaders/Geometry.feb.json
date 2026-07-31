@@ -1,0 +1,15 @@
+{
+  "techniques": [
+    {
+      "name": "Geometry",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "Geometry_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "Geometry_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}
