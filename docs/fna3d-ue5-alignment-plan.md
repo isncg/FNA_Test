@@ -4,7 +4,7 @@
 
 目标：修改 FNA3D_HLSL，使其支持 Unreal Engine 5 风格的延迟渲染管线。每一项变更都配有独立的测试程序。
 
-> **状态说明**：Phase 0（基线对齐）与 Phase 1（可采样深度）已完成；Phase 2-4 尚未开始。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
+> **状态说明**：Phase 0（基线对齐）、Phase 1（可采样深度）、Phase 2（深度纹理包装）已完成；Phase 3-4 尚未开始。引用行号对应 `../FNA/lib/FNA3D/src/FNA3D_Driver_SDL.c` 当前版本。
 >
 > **Phase 0（基线对齐）已于 2026-07-31 完成**，详见下文。完成 Phase 0 后，FNA3D 子模块应位于 `c821adb`（`storage buffer api`）及其后提交。
 
@@ -158,110 +158,65 @@ DepthSampling/
 
 ---
 
-## Phase 2: 深度缓冲区作为 C# Texture2D
+## Phase 2: 深度缓冲区作为 C# Texture2D（已完成）
 
 ### 目标
 将深度渲染缓冲区包装为 `Texture2D`，使其可以绑定到着色器的纹理槽位（如 `GraphicsDevice.Textures[0] = depthTexture`）。
 
-### 变更
+### 实际实现（2026-07-31）
 
-#### 2.1 FNA3D.h — 新 API
+#### C 层
 
-```c
-/* 从现有的深度渲染缓冲区创建一个可采样的纹理句柄。
- * 渲染缓冲区必须已使用 SAMPLER 用法创建（Phase 1）。
- * 返回的纹理共享相同的底层 GPU 资源。*/
-FNA3DAPI FNA3D_Texture* FNA3D_GetDepthStencilTexture(
-    FNA3D_Renderer *driverData,
-    FNA3D_Renderbuffer *renderbuffer
-);
-```
+- **`FNA3D.h`**：新增 `FNA3DAPI FNA3D_Texture* FNA3D_GetDepthStencilTexture(FNA3D_Device*, FNA3D_Renderbuffer*)`（公共 API 第一参数是 `FNA3D_Device*`，非原计划的 `FNA3D_Renderer*`）。
+- **`FNA3D.c`**：调度器，带 NULL 检查。
+- **`FNA3D_Driver.h`**：`FNA3D_Device` 函数表新增 `GetDepthStencilTexture` 条目 + `ASSIGN_DRIVER_FUNC`。
+- **`FNA3D_Driver_SDL.c`**：
+  - `SDLGPU_TextureHandle` 新增 `uint8_t ownsTexture` 字段；`CreateTextureWithHandle` 置 1，`FreeTextureHandle` 仅在 `ownsTexture` 时释放底层 `SDL_GPUTexture`——解决了计划中标注的双重释放 FIXME。
+  - `SDLGPU_GetDepthStencilTexture`：校验 renderbuffer 带 SAMPLER 用法（MSAA/不支持采样的格式返回 NULL 并报错），否则分配别名句柄（`ownsTexture = 0`）。
+  - 生命周期约定：包装纹理必须在 renderbuffer 之前 dispose。
 
-#### 2.2 FNA3D_Driver_SDL.c — 实现
+#### C# 层
 
-> 需一并解决生命周期问题：返回的 `SDLGPU_TextureHandle` 共享底层 `SDL_GPUTexture*`，但不能在 `AddDisposeTexture` 时释放该 `SDL_GPUTexture`（它由 `Renderbuffer` 拥有）。实现时需要区分“由渲染缓冲区拥有的共享纹理”和“独立创建的纹理”。
+- **`FNA3D.cs`**：`FNA3D_GetDepthStencilTexture` P/Invoke。
+- **`Texture2D.cs`**：新增 internal 包装构造函数 `Texture2D(GraphicsDevice, width, height, SurfaceFormat, IntPtr existingTexture)`，不创建 GPU 资源；`SetData`/`GetData` 对包装纹理不支持（仅着色器采样）。
+- **`RenderTarget2D.cs`**：
+  - `DepthStencilTexture` 属性懒创建（`SurfaceFormat.Single` 仅为占位标记）；不可用时返回 null。
+  - `Dispose` 中先释放包装纹理再释放 renderbuffer，符合生命周期约定。
 
-```c
-static FNA3D_Texture* SDLGPU_GetDepthStencilTexture(
-    FNA3D_Renderer *driverData,
-    FNA3D_Renderbuffer *renderbuffer
-) {
-    SDLGPU_Renderbuffer *rb = (SDLGPU_Renderbuffer*) renderbuffer;
-    SDLGPU_TextureHandle *handle = SDL_malloc(sizeof(SDLGPU_TextureHandle));
-    SDL_memcpy(handle, rb->textureHandle, sizeof(SDLGPU_TextureHandle));
-    // handle->boundAsRenderTarget 等字段需重置
-    handle->boundAsRenderTarget = 0;
-    // FIXME: 需要标记该 handle 不拥有底层 SDL_GPUTexture，避免重复释放
-    return (FNA3D_Texture*) handle;
-}
-```
+### 测试程序: `DepthTexture/`（已创建）
 
-#### 2.3 FNA3D_Driver.h — 函数表条目
+**路径**: `../FNA_Test/DepthTexture/`
 
-在 `FNA3D_Device` 函数表（`../FNA/lib/FNA3D/src/FNA3D_Driver.h`）中添加:
-```c
-FNA3D_Texture* (*GetDepthStencilTexture)(
-    FNA3D_Renderer *driverData,
-    FNA3D_Renderbuffer *renderbuffer
-);
-```
+**实际测试内容**：
+1. D24S8 `RenderTarget2D`，Pass 1 写入 z=0.25 的方块（x,y ∈ [-0.5,0.5]，Y 对称）
+2. `rt.DepthStencilTexture` 获取深度纹理
+3. Pass 2 全屏四边形采样 `t0`（PointClamp），把原始深度写为灰度到背板
+4. 断言：中心 ≈ 0.25（灰度 64）、方块外 = 1.0（白）、角落 = 1.0
 
-#### 2.4 FNA3D.cs — P/Invoke
+**验证结果**：
+- headless 运行 `RESULT: DepthTexture PASS`（首次运行即通过）
+- Vulkan 验证层开启下无验证错误（含深度采样的 layout 转换，由 SDL_GPU 自动处理）
+- 回归：DepthSampling / BasicEffect 仍 PASS
+- RenderDoc 确认深度纹理作为 `t0` 绑定（待人工抽查）
 
-```csharp
-[DllImport(nativeLibName, CallingConvention = CallingConvention.Cdecl)]
-public static extern IntPtr FNA3D_GetDepthStencilTexture(
-    IntPtr device, IntPtr renderbuffer);
-```
-
-#### 2.5 RenderTarget2D.cs — 暴露属性
-
-```csharp
-private Texture2D? _depthStencilTexture;
-
-public Texture2D DepthStencilTexture
-{
-    get
-    {
-        if (_depthStencilTexture == null && glDepthStencilBuffer != IntPtr.Zero)
-        {
-            IntPtr texPtr = FNA3D.FNA3D_GetDepthStencilTexture(
-                GraphicsDevice.GLDevice, glDepthStencilBuffer);
-            _depthStencilTexture = new Texture2D(
-                GraphicsDevice, Width, Height, false,
-                SurfaceFormat.Single, /* or special depth format */
-                texPtr);
-        }
-        return _depthStencilTexture;
-    }
-}
-```
-
-**注意**: `Texture2D` 可能需要一个新的内部构造函数，接受预先存在的 `FNA3D_Texture*` 指针，避免重复创建。
-
-### 测试程序: `DepthTexture/`（待创建）
-
-**路径**: `../FNA_Test/DepthTexture/`（当前不存在）
-
-**核心逻辑**:
-1. 创建带有深度的 `RenderTarget2D`，渲染已知深度的三角形
-2. 通过 `rt.DepthStencilTexture` 获取深度纹理
-3. 渲染第二个全屏通道：对深度纹理进行采样，输出到颜色
-4. 使用 `GetData` 回读颜色，验证深度值正确（在容差范围内）
-
-**验证**:
-- `AssertPixel` 检查深度值 ≈ 0.5（三角形）和 1.0（清除值）
-- 在 RenderDoc 中确认深度纹理作为 `t0` 绑定
-
-**文件**:
+**实际文件**：
 ```
 DepthTexture/
   DepthTexture.csproj
-  Program.cs
-  Shaders/DepthToColor_vs.hlsl
-  Shaders/DepthToColor_ps.hlsl   # Sample(depthTex, uv).r → SV_TARGET0
-  Shaders/DepthToColor.feb.json
+  Program.cs                    # 双 pass：深度写入 + 深度采样可视化
+  Shaders/DepthFill_vs.hlsl     # clip-space 直通（PC 布局）
+  Shaders/DepthFill_ps.hlsl
+  Shaders/DepthView_vs.hlsl     # 全屏四边形（PT 布局）
+  Shaders/DepthView_ps.hlsl     # Sample(depthTex, uv).r → 灰度
+  Shaders/DepthFill.feb.json
+  Shaders/DepthView.feb.json
 ```
+
+已注册到 `run_tests.sh` / `run_tests.bat`。
+
+**已知限制**：
+- MSAA 深度缓冲区不可包装（Phase 1 回退为无 SAMPLER 用法，属性返回 null）。
+- 同一帧内“写深度 → 采样深度”需先 `SetRenderTarget` 切走（结束 render pass），与普通 RT 采样约束一致。
 
 ---
 
@@ -542,7 +497,7 @@ Phase 0 (基线对齐：StorageBuffer C 实现 + FEB 修复)  【已完成】
     ↓
 Phase 1 (可采样深度)  【已完成】
     ↓
-Phase 2 (深度纹理包装) ←── 依赖 Phase 1 的 SAMPLER 标志
+Phase 2 (深度纹理包装) 【已完成】←── 依赖 Phase 1 的 SAMPLER 标志
     ↓
 Phase 3 (共享深度缓冲区) ←── 依赖 Phase 2 的纹理包装
 
@@ -552,7 +507,7 @@ Phase 4 (计算着色器) ←── 依赖 Phase 0 的 StorageBuffer；可与 Ph
 ## 构建和测试
 
 ### 构建单个测试
-> `DepthTexture/`、`SharedDepth/`、`ComputeDispatch/` 待对应 Phase 实施时创建；`DepthSampling/` 已存在。
+> `SharedDepth/`、`ComputeDispatch/` 待对应 Phase 实施时创建；`DepthSampling/`、`DepthTexture/` 已存在。
 
 ```bash
 cd ../FNA_Test/DepthSampling
@@ -579,7 +534,7 @@ ninja -C build
 | Phase | 状态 | 测试程序 | 验证内容 | RenderDoc 检查 |
 |-------|------|---------|---------|---------------|
 | 1 | 完成 | DepthSampling | 深度缓冲区有 SAMPLER 用法；双路径深度测试正常 | `vkCreateImage` 的 usage 标志 |
-| 2 | 计划 | DepthTexture | DepthStencilTexture 返回有效纹理 | 片段着色器描述符集绑定 |
+| 2 | 完成 | DepthTexture | DepthStencilTexture 返回有效纹理；采样值匹配写入深度 | 片段着色器描述符集绑定 |
 | 3 | 计划 | SharedDepth | 两个通道使用同一深度缓冲区 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
 | 4 | 计划 | ComputeDispatch | Compute 输出匹配预期 | `vkCmdDispatch` 和存储缓冲区内容 |
 

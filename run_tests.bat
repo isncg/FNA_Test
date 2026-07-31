@@ -255,6 +255,17 @@ if exist "%SCRIPT_DIR%DepthSampling\Shaders\DepthQuad.feb.json" (
     popd
 )
 
+REM DepthTexture shaders (FNA3D UE5 alignment Phase 2)
+if exist "%SCRIPT_DIR%DepthTexture\Shaders\DepthFill.feb.json" (
+    echo   Building DepthTexture shader FEBs...
+    pushd "%SCRIPT_DIR%DepthTexture\Shaders"
+    %PYTHON_CMD% "%FEB_BUILDER%" DepthFill.feb.json >nul 2>&1
+    if !ERRORLEVEL! neq 0 echo   [WARN] DepthFill FEB build failed
+    %PYTHON_CMD% "%FEB_BUILDER%" DepthView.feb.json >nul 2>&1
+    if !ERRORLEVEL! neq 0 echo   [WARN] DepthView FEB build failed
+    popd
+)
+
 REM SceneRenderer shaders
 if exist "%SCRIPT_DIR%SceneRenderer\Shaders\" (
     echo   Building SceneRenderer FEBs...
@@ -361,6 +372,7 @@ REM ─── Top-level tests ────────────────�
 call :run_test "" JFAOutline
 call :run_test "" SDFFontTest
 call :run_test "" DepthSampling
+call :run_test "" DepthTexture
 
 REM ─── SceneRenderer (deferred PBR pipeline) ─────────────────────────
 call :run_test "" SceneRenderer

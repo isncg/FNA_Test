@@ -1,0 +1,15 @@
+{
+  "techniques": [
+    {
+      "name": "DepthView",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "DepthView_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "DepthView_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}

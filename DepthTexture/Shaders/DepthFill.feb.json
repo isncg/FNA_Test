@@ -1,0 +1,15 @@
+{
+  "techniques": [
+    {
+      "name": "DepthFill",
+      "passes": [
+        {
+          "name": "P0",
+          "vertexShader": {"source": "DepthFill_vs.hlsl", "entry": "VSMain"},
+          "pixelShader":  {"source": "DepthFill_ps.hlsl", "entry": "PSMain"}
+        }
+      ]
+    }
+  ],
+  "parameters": []
+}
