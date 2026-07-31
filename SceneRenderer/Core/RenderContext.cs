@@ -22,6 +22,13 @@ public class RenderContext
     public RenderTarget2D? SSRRT;
     public RenderTarget2D? HdrSceneRT;
 
+    /// <summary>
+    /// Depth-stencil buffer shared by the GBuffer and HDR scene targets
+    /// (UE5-style): the GBuffer pass fills it, the Skybox pass depth-tests
+    /// against it. Owned by SceneRendererEngine.
+    /// </summary>
+    public DepthStencilBuffer? SharedDepth;
+
     // Bloom output (from BloomPass for TonemapPass)
     public RenderTarget2D? BloomRT;
 

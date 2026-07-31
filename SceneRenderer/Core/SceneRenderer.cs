@@ -13,6 +13,14 @@ public class SceneRendererEngine : IDisposable
     private readonly ResourcePool _resources;
     private int _width, _height;
 
+    /// <summary>
+    /// Depth-stencil buffer shared by the GBuffer and HDR scene render targets.
+    /// The GBuffer pass fills it; the Skybox pass depth-tests against it so the
+    /// sky is rejected wherever geometry exists (UE5-style), replacing the old
+    /// additive blend that masked sky by sampling GBuffer linear depth.
+    /// </summary>
+    private DepthStencilBuffer _sharedDepth = null!;
+
     public GBufferPass GBuffer { get; }
     public ShadowMapPass ShadowMap { get; }
     public SSAOPass SSAO { get; }
@@ -53,6 +61,12 @@ public class SceneRendererEngine : IDisposable
             Tonemap,
         };
 
+        // Must exist before the passes allocate their render targets
+        _sharedDepth = new DepthStencilBuffer(
+            device, width, height, DepthFormat.Depth24Stencil8);
+        GBuffer.SharedDepth = _sharedDepth;
+        DeferredLighting.SharedDepth = _sharedDepth;
+
         foreach (var pass in _passes)
             pass.Initialize(device, width, height);
     }
@@ -79,6 +93,7 @@ public class SceneRendererEngine : IDisposable
             Resources = _resources,
             Width = _width,
             Height = _height,
+            SharedDepth = _sharedDepth,
             PrevViewProj = _firstFrame ? currentViewProj : _prevViewProj,
         };
 
@@ -108,7 +123,7 @@ public class SceneRendererEngine : IDisposable
         // Pass 6: Deferred Lighting
         DeferredLighting.Execute(ctx);
 
-        // Pass 7: Skybox (blended into HDR scene RT)
+        // Pass 7: Skybox (depth-tested against the shared depth buffer)
         if (Skybox.Enabled)
             Skybox.Execute(ctx);
 
@@ -139,8 +154,21 @@ public class SceneRendererEngine : IDisposable
     {
         _width = width;
         _height = height;
+
+        /* Render targets alias the shared buffer, so they have to be torn down
+         * before it is replaced: dispose the old buffer only after the passes
+         * have released their targets in Resize.
+         */
+        var oldDepth = _sharedDepth;
+        _sharedDepth = new DepthStencilBuffer(
+            _device, width, height, DepthFormat.Depth24Stencil8);
+        GBuffer.SharedDepth = _sharedDepth;
+        DeferredLighting.SharedDepth = _sharedDepth;
+
         foreach (var pass in _passes)
             pass.Resize(width, height);
+
+        oldDepth?.Dispose();
     }
 
     public List<IRenderPass> GetPasses() => _passes;
@@ -150,5 +178,7 @@ public class SceneRendererEngine : IDisposable
         foreach (var pass in _passes)
             pass.Dispose();
         _resources.Dispose();
+        // After the passes, since their targets alias this buffer
+        _sharedDepth?.Dispose();
     }
 }

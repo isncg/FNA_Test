@@ -22,6 +22,14 @@ public class DeferredLightingPass : IRenderPass
     public Texture2D? DebugOutput => _hdrRT;
     public bool DebugAlbedo; // when true, overrides EnvIntensity=0 to trigger albedo diagnostic
 
+    /// <summary>
+    /// Shared depth-stencil buffer injected by SceneRendererEngine before
+    /// Initialize/Resize. Attaching it to the HDR target lets the Skybox pass
+    /// depth-test against the GBuffer depth. When null the HDR target has no
+    /// depth buffer (legacy behaviour).
+    /// </summary>
+    public DepthStencilBuffer? SharedDepth;
+
     public void Initialize(GraphicsDevice device, int width, int height)
     {
         _device = device;
@@ -46,8 +54,22 @@ public class DeferredLightingPass : IRenderPass
     private void CreateRT()
     {
         _hdrRT?.Dispose();
-        _hdrRT = new RenderTarget2D(_device, _width, _height, false,
-            SurfaceFormat.HalfVector4, DepthFormat.None);
+
+        /* Share the GBuffer's depth so the Skybox pass can depth-test against
+         * it. PreserveContents keeps SetRenderTarget from clearing that depth
+         * (and this pass covers the whole target anyway).
+         */
+        if (SharedDepth != null)
+        {
+            _hdrRT = new RenderTarget2D(_device, _width, _height, false,
+                SurfaceFormat.HalfVector4, SharedDepth,
+                RenderTargetUsage.PreserveContents);
+        }
+        else
+        {
+            _hdrRT = new RenderTarget2D(_device, _width, _height, false,
+                SurfaceFormat.HalfVector4, DepthFormat.None);
+        }
     }
 
     public void Resize(int width, int height)
@@ -59,7 +81,9 @@ public class DeferredLightingPass : IRenderPass
     public void Execute(RenderContext ctx)
     {
         _device.SetRenderTarget(_hdrRT);
-        _device.Clear(Color.Black);
+        // Colour only: the shared depth buffer still holds the GBuffer depth
+        // that the Skybox pass tests against.
+        _device.Clear(ClearOptions.Target, Color.Black, 1.0f, 0);
         _device.DepthStencilState = DepthStencilState.None;
         _device.RasterizerState = RasterizerState.CullNone;
         _device.BlendState = BlendState.Opaque;

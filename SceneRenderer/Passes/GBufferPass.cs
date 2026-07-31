@@ -17,6 +17,12 @@ public class GBufferPass : IRenderPass
 
     private RenderTarget2D? _rt0, _rt1, _rt2;
 
+    /// <summary>
+    /// Shared depth-stencil buffer injected by SceneRendererEngine before
+    /// Initialize/Resize. When null this pass falls back to its own buffer.
+    /// </summary>
+    public DepthStencilBuffer? SharedDepth;
+
     public void Initialize(GraphicsDevice device, int width, int height)
     {
         _device = device;
@@ -38,8 +44,23 @@ public class GBufferPass : IRenderPass
         _rt1?.Dispose();
         _rt2?.Dispose();
 
-        _rt0 = new RenderTarget2D(_device, _width, _height, false,
-            SurfaceFormat.Color, DepthFormat.Depth24Stencil8);
+        /* RT0 carries the depth attachment for the whole MRT set (FNA takes the
+         * depth buffer from renderTargets[0]). Using the engine's shared buffer
+         * lets the Skybox pass depth-test against this pass's output.
+         * PreserveContents is required: DiscardContents would make every
+         * SetRenderTargets clear the shared depth.
+         */
+        if (SharedDepth != null)
+        {
+            _rt0 = new RenderTarget2D(_device, _width, _height, false,
+                SurfaceFormat.Color, SharedDepth,
+                RenderTargetUsage.PreserveContents);
+        }
+        else
+        {
+            _rt0 = new RenderTarget2D(_device, _width, _height, false,
+                SurfaceFormat.Color, DepthFormat.Depth24Stencil8);
+        }
         _rt1 = new RenderTarget2D(_device, _width, _height, false,
             SurfaceFormat.HalfVector4, DepthFormat.None);
         _rt2 = new RenderTarget2D(_device, _width, _height, false,

@@ -28,6 +28,10 @@ class Program : Game
     private string[] _materialDirs = null!;
     private int _teapotMat;
     private int _floorMat;
+
+    // Headless skybox/shared-depth verification state
+    private int _headlessFrame;
+    private Color[]? _skyOnPixels;
     private Texture2D?[] _albedoMaps = null!;
     private Texture2D?[] _normalMaps = null!;
     private Texture2D?[] _ormMaps = null!;
@@ -380,14 +384,102 @@ class Program : Game
         }
         else
         {
-            // Headless test
-            TestHarness.Tick(this, 3, () =>
+            /* Headless test. Beyond coverage, verify the UE5-style shared depth
+             * buffer: render one frame with the skybox and one without, then
+             * compare. Sky pixels must change, geometry pixels must not — if the
+             * depth test against the shared buffer were broken the sky would
+             * paint over geometry (everything changes) or never appear at all
+             * (nothing changes).
+             *
+             * Update runs before Draw, so the backbuffer read here holds the
+             * previous frame.
+             */
+            _headlessFrame += 1;
+
+            if (_headlessFrame == 3)
             {
-                var px = TestHarness.ReadBackbuffer(GraphicsDevice);
-                int fails = TestHarness.AssertCoverage(px, new Color(0, 0, 0), 0.80f,
-                    "scene-coverage");
+                _skyOnPixels = TestHarness.ReadBackbuffer(GraphicsDevice);
+                _renderer.Skybox.Enabled = false;
+            }
+            else if (_headlessFrame == 4)
+            {
+                var skyOff = TestHarness.ReadBackbuffer(GraphicsDevice);
+                int fails = TestHarness.AssertCoverage(_skyOnPixels!, new Color(0, 0, 0),
+                    0.80f, "scene-coverage");
+
+                /* Pixels that are clearly lit with the skybox off are geometry;
+                 * the depth test must leave every one of them untouched.
+                 * Counting them separately keeps the check independent of how
+                 * much of the frame the sky covers (this scene is ~97% sky).
+                 *
+                 * The threshold matters: deferred lighting leaves a faint
+                 * ambient/IBL residue (luminance 1-4) on empty pixels, which
+                 * the sky legitimately replaces. Only pixels well above that
+                 * noise floor count as geometry.
+                 */
+                const int GeometryLuminance = 16;
+                int geometryPixels = 0, overwritten = 0, skyPixels = 0;
+                for (int i = 0; i < skyOff.Length; i += 1)
+                {
+                    bool changed = _skyOnPixels![i].PackedValue != skyOff[i].PackedValue;
+                    int lum = Math.Max(skyOff[i].R, Math.Max(skyOff[i].G, skyOff[i].B));
+                    if (lum >= GeometryLuminance)
+                    {
+                        geometryPixels += 1;
+                        if (changed)
+                        {
+                            overwritten += 1;
+                        }
+                    }
+                    else if (changed)
+                    {
+                        skyPixels += 1;
+                    }
+                }
+
+                if (geometryPixels == 0)
+                {
+                    Console.WriteLine("FAIL [geometry-present]: no lit geometry to test against");
+                    fails += 1;
+                }
+                else if (overwritten > 0)
+                {
+                    // Brightness of the overwritten pixels helps tell real
+                    // geometry from lighting residue in empty space.
+                    int maxLum = 0;
+                    long sumLum = 0;
+                    for (int i = 0; i < skyOff.Length; i += 1)
+                    {
+                        int lum = Math.Max(skyOff[i].R, Math.Max(skyOff[i].G, skyOff[i].B));
+                        if (lum < GeometryLuminance) continue;
+                        if (_skyOnPixels![i].PackedValue == skyOff[i].PackedValue) continue;
+                        if (lum > maxLum) maxLum = lum;
+                        sumLum += lum;
+                    }
+                    Console.WriteLine(
+                        $"FAIL [skybox-depth-test]: sky overwrote {overwritten}/{geometryPixels} " +
+                        $"geometry pixels; the shared depth test is not rejecting them " +
+                        $"(overwritten luminance max={maxLum} mean={sumLum / overwritten})");
+                    fails += 1;
+                }
+
+                if (skyPixels == 0)
+                {
+                    Console.WriteLine(
+                        "FAIL [skybox-visible]: the skybox never reached the HDR target");
+                    fails += 1;
+                }
+
+                if (fails == 0)
+                {
+                    Console.WriteLine(
+                        $"[SceneRenderer] Shared depth OK: {skyPixels} sky pixels drawn, " +
+                        $"all {geometryPixels} geometry pixels preserved.");
+                }
+
                 TestHarness.Report("SceneRenderer", fails);
-            });
+                Exit();
+            }
         }
     }
 

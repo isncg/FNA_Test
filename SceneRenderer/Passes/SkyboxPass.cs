@@ -12,6 +12,18 @@ public class SkyboxPass : IRenderPass
     private Effect _effect = null!;
     private int _width, _height;
 
+    /// <summary>
+    /// Sky geometry sits at the far plane (VS emits z = 1.0), so LessEqual
+    /// passes only where the GBuffer left the shared depth at its cleared 1.0.
+    /// Depth writes are off — nothing after this pass reads depth.
+    /// </summary>
+    private static readonly DepthStencilState SkyDepthState = new DepthStencilState
+    {
+        DepthBufferEnable = true,
+        DepthBufferWriteEnable = false,
+        DepthBufferFunction = CompareFunction.LessEqual
+    };
+
     public string Name => "Skybox";
     public Texture2D? DebugOutput => null; // writes into HDR scene RT
     public bool Enabled = true;
@@ -45,16 +57,15 @@ public class SkyboxPass : IRenderPass
         float fovX = tanHalfFov * aspect;
         float fovY = tanHalfFov;
 
-        // Set render target and blend to add onto existing HDR scene
+        // Render into the HDR scene RT, which shares the GBuffer's depth
+        // buffer: the depth test alone decides where sky is visible.
         _device.SetRenderTarget(ctx.HdrSceneRT);
-        _device.DepthStencilState = DepthStencilState.None;
+        _device.DepthStencilState = SkyDepthState;
         _device.RasterizerState = RasterizerState.CullNone;
-        _device.BlendState = BlendState.Additive;
+        _device.BlendState = BlendState.Opaque;
 
         _device.Textures[0] = ctx.Scene.EnvMap;
         _device.SamplerStates[0] = SamplerState.LinearClamp;
-        _device.Textures[1] = ctx.GBufferRT2;
-        _device.SamplerStates[1] = SamplerState.PointClamp;
 
         _effect.Parameters["CameraForward"].SetValue(forward);
         _effect.Parameters["CameraRight"].SetValue(right);

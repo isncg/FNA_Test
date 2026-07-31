@@ -9,15 +9,38 @@ Program.cs (Game subclass)
   ├── Scene (objects + lights + materials)
   ├── SceneCamera (orbit cam + frustum culling)
   └── SceneRendererEngine (orchestrator)
+        ├── _sharedDepth (D24S8, shared by GBuffer RT0 + _hdrSceneRT)
         ├── ShadowMapPass    → _shadowMap (R32F, 2048x2048)
-        ├── GBufferPass      → RT0 (Color RGBA8), RT1 (HalfVector4), RT2 (HalfVector4)
+        ├── GBufferPass      → RT0 (Color RGBA8), RT1 (HalfVector4), RT2 (HalfVector4) + fills _sharedDepth
         ├── SSAOPass         → _ssaoRT (R32F) → BlurAOPass → _ssaoBlurRT (R32F)
         ├── SSRPass          → _ssrRT (HalfVector4)
-        ├── DeferredLightingPass → _hdrSceneRT (HalfVector4)
-        ├── SkyboxPass       → _hdrSceneRT (additive)
+        ├── DeferredLightingPass → _hdrSceneRT (HalfVector4, clears colour only)
+        ├── SkyboxPass       → _hdrSceneRT (depth-tested against _sharedDepth)
         ├── BloomPass        → bloom chain (HalfVector4)
         └── TonemapPass      → backbuffer (ACES + gamma)
 ```
+
+## Shared Depth Buffer (UE5-style)
+
+`SceneRendererEngine` owns one `DepthStencilBuffer` that both the GBuffer's RT0
+and the HDR scene target attach to (FNA takes an MRT set's depth from
+`renderTargets[0]`). The GBuffer pass fills it; the Skybox pass then depth-tests
+against it, so the sky is rejected wherever geometry exists.
+
+Rules that keep this working:
+
+- Both targets must use `RenderTargetUsage.PreserveContents`. The default
+  `DiscardContents` makes every `SetRenderTargets` clear the shared depth.
+- Only the GBuffer pass clears depth (its `Clear(Color)` covers
+  Target|DepthBuffer|Stencil). DeferredLighting must clear **colour only**
+  (`Clear(ClearOptions.Target, ...)`).
+- The Skybox VS emits `z = 1.0`, so `CompareFunction.LessEqual` with depth
+  writes disabled passes only where depth is still the cleared 1.0. Blending is
+  `Opaque` — the sky replaces the lighting residue in empty pixels rather than
+  adding to it.
+
+This replaced the earlier approach where the Skybox sampled GBuffer RT2's linear
+depth and called `discard`, blending additively.
 
 ## GBuffer Layout (3 MRTs + Depth)
 
@@ -50,15 +73,16 @@ Program.cs (Game subclass)
 
 **Passes**: Each implements `IRenderPass` with `Initialize`/`Resize`/`Execute`/`Dispose`. Passes communicate via `RenderContext` which holds shared RT references.
 
-**Orchestrator**: `SceneRendererEngine` owns the pass list and `ResourcePool`. `Render(scene, camera)` executes passes in order.
+**Orchestrator**: `SceneRendererEngine` owns the pass list, the `ResourcePool` and the shared `DepthStencilBuffer`. `Render(scene, camera)` executes passes in order. The shared depth buffer is created before the passes initialize and injected into `GBufferPass.SharedDepth` / `DeferredLightingPass.SharedDepth`; on resize it is replaced *before* the passes rebuild their targets and the old one is disposed only afterwards, since those targets alias it.
 
 ## Constraints
 
-- **No compute shaders**: all post-processing via fullscreen triangle (SV_VertexID)
+- **No compute shaders**: all post-processing via fullscreen triangle (SV_VertexID). FNA3D does support `DispatchCompute` (see `ComputeDispatch/`), this pipeline just has no use for it yet.
 - **MRT limit**: 4 targets (using 3 for GBuffer)
 - **PS sampler limit**: 16 (DeferredLighting uses 9)
 - **C1-C5 vertex conventions**: PNT layout matches VertexPositionNormalTexture
 - **Vulkan-only**: D3D→Vulkan Y-flip conventions in SSAO, SSR, Skybox
+- **Shared depth**: see the section above — `PreserveContents` on both targets, and only the GBuffer pass may clear depth
 
 ## Key Algorithms
 

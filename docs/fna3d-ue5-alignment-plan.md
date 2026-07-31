@@ -610,17 +610,41 @@ ninja -C build
 | 3 | 完成 | SharedDepth | 两个通道使用同一深度缓冲区；`--no-share` 负对照失败 | 两个 `vkCmdBeginRenderPass` 使用同一 `VkImageView` |
 | 4 | 完成 | ComputeDispatch | Compute 输出匹配预期（全 256 值） | `vkCmdDispatch` 和存储缓冲区内容 |
 
-## 回滚到 SceneRenderer 修复（未来重构方向）
+## SceneRenderer 共享深度重构（已于 2026-07-31 完成）
 
-> 当前 `SceneRenderer/DESIGN.md` 明确约束 **No compute shaders**，且 SkyboxPass 是 additive 写入 `_hdrSceneRT`，并未使用共享深度缓冲区的硬件深度测试。完成 Phase 1-3 后，可再考虑将 SceneRenderer 的 Skybox 改为 UE5 风格的硬件深度测试：
+原计划作为“未来重构方向”列出，现已随 Phase 3 落地。SceneRenderer 的 Skybox 从“采样 GBuffer 线性深度 + `discard` + additive 混合”改为 UE5 风格的**硬件深度测试**。
 
-1. 创建共享 `DepthStencilBuffer`
-2. GBuffer 通道使用此深度缓冲区渲染
-3. DepthFill 通道将深度写入 HDR RT（也使用同一共享深度）
-4. DeferredLighting 渲染到 HDR RT（深度测试关闭）
-5. Skybox 渲染到 HDR RT，启用 `DepthBufferFunction.LessEqual` 深度测试
+### 实际实现
 
-> **注意**：SceneRenderer 的 effect 加载与 draw 崩溃已在 2026-07-31 全部修复（见下节），`RESULT: SceneRenderer PASS`。本重构现已解除阻碍，可作为下一步实施。
+| 位置 | 变更 |
+|------|------|
+| `Core/SceneRenderer.cs` | 引擎拥有 `DepthStencilBuffer _sharedDepth`，在 pass 初始化**之前**创建并注入；Resize 时先换新缓冲区、待 pass 重建完目标后再释放旧的（目标别名于它） |
+| `Core/RenderContext.cs` | 新增 `SharedDepth` 字段 |
+| `Passes/GBufferPass.cs` | RT0 改用共享深度（MRT 的深度取自 `renderTargets[0]`）+ `PreserveContents` |
+| `Passes/DeferredLightingPass.cs` | HDR RT 挂共享深度 + `PreserveContents`；`Clear` 改为**仅清颜色**（`ClearOptions.Target`），否则会抹掉 GBuffer 深度 |
+| `Passes/SkyboxPass.cs` | `DepthBufferEnable=true` + `LessEqual` + 关深度写入；混合从 `Additive` 改为 `Opaque`；不再绑定 GBufferRT2 |
+| `Shaders/Skybox_ps.hlsl` | 删除手工深度采样与 `discard`（VS 本就输出 `z = 1.0`，正好落在远平面） |
+
+### 测试强化（关键）
+
+原测试只断言 “80% 像素非黑”，**无法区分天空被正确遮挡还是糊满全屏**。改为开关对照：帧 3 抓取（天空开）→ 关闭 Skybox → 帧 4 抓取对比；天空关时亮度 ≥ 16 的像素判为几何体，必须逐位不变，且必须有天空像素被绘出。
+
+实测：`Shared depth OK: 906561 sky pixels drawn, all 15039 geometry pixels preserved`。
+
+**三个负对照均如预期失败**（证明断言有鉴别力）：
+- `CompareFunction.Never` → 0 天空像素 → FAIL [skybox-visible]
+- `DepthBufferEnable=false`（等价旧行为）→ 15039/15039 几何像素被覆盖（亮度 max=249 mean=207）→ FAIL [skybox-depth-test]
+- 阀值设为“非黑”时误报 7620/22659：该批像素亮度 max=4 mean=1，实为空白区域的环境光沾染，非几何体——因此采用亮度阀值 16
+
+### 验证结果
+
+- `RESULT: SceneRenderer PASS`，Vulkan 验证层零错误
+- 全量回归 12/12 PASS：SceneRenderer / BasicEffect / AsteroidField / DepthSampling / DepthTexture / SharedDepth / ComputeDispatch / JFAOutline / SDFFontTest / TrailEffect / DepthSorting / ParticleFire
+- `SceneRenderer/DESIGN.md` 已同步（新增“Shared Depth Buffer”章节与约束条目）
+
+### 一个被推翻的假设
+
+排查中曾怀疑 `SetRenderTarget(null)` 在背板 `DiscardContents` 下队列的深度清除会泄露到共享深度。实际不会：`SDLGPU_SetRenderTargets` 开头就会在有待处理清除时先 `BeginRenderPass` flush 到**当前**目标，且标志在 `BeginRenderPass` 末尾无条件重置。据此撤销了一处多余的 `RenderTargetUsage` 改动。
 
 ---
 
