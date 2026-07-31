@@ -620,7 +620,7 @@ ninja -C build
 4. DeferredLighting 渲染到 HDR RT（深度测试关闭）
 5. Skybox 渲染到 HDR RT，启用 `DepthBufferFunction.LessEqual` 深度测试
 
-> **注意**：当前 SceneRenderer 除 effect 加载外尚有其他既有缺陷（见下节），上述重构应在那些问题解决后再进行。
+> **注意**：SceneRenderer 的 effect 加载与 draw 崩溃已在 2026-07-31 全部修复（见下节），`RESULT: SceneRenderer PASS`。本重构现已解除阻碍，可作为下一步实施。
 
 ---
 
@@ -658,16 +658,30 @@ ninja -C build
 | TrailEffect / TrailEffectCapture / ParticleFire | — | ✅ PASS（无回归） |
 | SceneRenderer | effect 解析越界 | ⚠️ 越过解析，但崩在其他位置 |
 
-### SceneRenderer 剩余问题（未修复，已确认非本项目引入）
+### SceneRenderer 剩余问题（已于 2026-07-31 修复）
 
-SceneRenderer 现在能完成 effect 加载与 IBL 预计算，但在 draw 调用中 native 崩溃。已取得的证据：
+修复 FEB param 布局后，SceneRenderer 能完成 effect 加载与 IBL 预计算，但在 draw 调用中 native 崩溃（`0xC0000005`）。当时取得的证据：
 
 - Phase 0 基线 DLL 下同样崩溃（位置为 SkyboxPass），确认为既有问题
-- 崩溃点在同一 DLL 多次运行间漂移（ShadowMapPass / DeferredLightingPass），而 SceneRenderer 代码无随机数 → 指向内存/生命周期问题
-- 零 Vulkan 验证层报错 → 在到达 Vulkan 之前就挂了，像是空/悬垂的 SDL_GPU 句柄
-- 已排除：管线创建失败（无 `Failed to create graphics pipeline` 日志）、uniform 越界（native `SetEffectParamValueByHandle` 会按 `FNA3D_GetParamSize` 截断并告警）、资源池稳态回收（仅尺寸变化时释放）
-- **领先假设**：已 `Dispose` 的纹理仍留在驱动的 `fragmentTextureSamplerBindings` 中（`SDLGPU_VerifySampler` 存的是裸 `SDL_GPUTexture*`，而 `SDL_ReleaseGPUTexture` 是立即释放），下次 draw 解引用已释放指针。需 native 调试器或在 `VerifySampler` / `FreeTextureHandle` 加日志才能定论。
+- 崩溃点在同一 DLL 多次运行间漂移（ShadowMapPass / DeferredLightingPass / SkyboxPass），而 SceneRenderer 代码无随机数
+- 零 Vulkan 验证层报错
 
-### 另一个独立缺陷：数组型 effect 参数未支持
+> **当时的“悬垂纹理”假设是错的**。按该假设在 `SDLGPU_INTERNAL_FreeTextureHandle` 中添加了 sampler 绑定清理（该修复本身是正确的加固，已保留），但崩溃依旧。
 
-`SceneRenderer/Shaders/DeferredLighting.feb.json` 为 `LightData` 声明了 `"count": 64`，但 **FEB 格式、feb_builder、C/C# 解析器三方都没有 count 字段**，`FNA3D_EffectParam.currentValue` 也只有 16 个 float。native 写入会静默截断到 16 字节，即 `LightData[64]` 实际只有第一个 float4 生效 —— 不是崩溃原因（有截断保护），但意味着多光源照明目前不正确，属独立待办。
+### 真实根因：数组型 effect 参数堆损坏
+
+`DeferredLighting.feb.json` 的 `LightData` 声明了 `"count": 64`，但 FEB 无 count 字段，`Effect.INTERNAL_parseEffect` 因此只按标量尺寸分配非托管缓冲（FLOAT4 = **16 字节**）。SceneRenderer 每帧调 `SetValue(Vector4[64])` 写入 **1024 字节** → 越写 1008 字节堆内存 → 破坏相邻分配（包括驱动内部指针）→ 后续 draw 随机位置崩溃。“崩溃点漂移 + 零验证错误”完全吻合堆损坏特征。
+
+三层修复：
+
+| 层 | 文件 | 修复 |
+|----|------|------|
+| 分配 | `Effect.cs` | 按**寄存器跨度**定尺寸：数组占用连续寄存器，到下一个参数寄存器的距离即真实尺寸（`LightData` c8→下一参数 c72，64 寄存器 = 1024 字节）；纹理参数（t# 空间）排除在外 |
+| native | `FNA3D_Driver_SDL.c` | `SetEffectParamValueByHandle` 的钳制从标量 `FNA3D_GetParamSize` 改为整个 `uniformDataSize`（否则数组写入被截到 16 字节，只有第一个 float4 生效）；`currentValue`（固定 64 字节）单独钳制 |
+| 防御 | `EffectParameter.cs` | `SetValue(Vector2/3/4[]/Quaternion[]/float[]/int[])` 按 `valuesSizeBytes` 钳制循环上限，即使尺寸推算失误也不会越写 |
+
+**结果**：`RESULT: SceneRenderer PASS`。回归：SpriteEffect / BasicEffect / SkinnedEffect / AsteroidField / DepthSampling / DepthTexture / SharedDepth / ComputeDispatch / JFAOutline / SDFFontTest / TrailEffect / DepthSorting 均 PASS。
+
+副作用：多光源照明现在真正生效（之前 native 截断导致只有第一个光源数据到达 GPU）。
+
+> **局限**：寄存器跨度推算依赖“数组后面还有参数”。若数组是最后一个参数，仍只能得到标量尺寸（此时第三层钳制保证不崩，但数据会被截断）。**彻底解决需给 FEB 加 count 字段**（param 条目格式变更，需同步 builder / C 解析器 / C# 解析器三方 + 全量重建 FEB），属独立待办。
