@@ -7,3 +7,4 @@ obj/
 .claude/
 __pycache__/
 **/imgui.ini
+/tmp/
