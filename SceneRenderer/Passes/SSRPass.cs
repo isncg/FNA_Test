@@ -29,6 +29,30 @@ public class SSRPass : IRenderPass
     public float MaxRoughness = 0.6f;
     public float FadeDistance = 0.15f;
 
+    /// <summary>
+    /// Shared depth-stencil buffer injected by SceneRendererEngine before
+    /// Initialize/Resize. The SSR target aliases it so this pass can
+    /// stencil-test against the per-object SSR marks the GBuffer pass wrote
+    /// (SceneObject.ReceivesSSR). When null, masking is skipped.
+    /// </summary>
+    public DepthStencilBuffer? SharedDepth;
+
+    /* Stencil-only test: compute SSR exclusively on pixels the GBuffer pass
+     * marked as SSR receivers. Depth testing stays off (fullscreen pass);
+     * both winding sets use the same function so the fullscreen triangle's
+     * orientation cannot bypass the test.
+     */
+    private static readonly DepthStencilState StencilReceiversOnly = new()
+    {
+        DepthBufferEnable = false,
+        StencilEnable = true,
+        ReferenceStencil = 1,
+        StencilFunction = CompareFunction.Equal,
+        StencilPass = StencilOperation.Keep,
+        CounterClockwiseStencilFunction = CompareFunction.Equal,
+        CounterClockwiseStencilPass = StencilOperation.Keep,
+    };
+
     public void Initialize(GraphicsDevice device, int width, int height)
     {
         _device = device;
@@ -54,8 +78,23 @@ public class SSRPass : IRenderPass
     private void CreateRT()
     {
         _ssrRT?.Dispose();
-        _ssrRT = new RenderTarget2D(_device, _width, _height, false,
-            SurfaceFormat.HalfVector4, DepthFormat.None);
+
+        /* Aliasing the shared buffer gives this pass the stencil marks the
+         * GBuffer wrote. PreserveContents is required: DiscardContents would
+         * make SetRenderTargets clear the shared depth+stencil and destroy
+         * the marks (and the depth the Skybox pass still tests against).
+         */
+        if (SharedDepth != null)
+        {
+            _ssrRT = new RenderTarget2D(_device, _width, _height, false,
+                SurfaceFormat.HalfVector4, SharedDepth,
+                RenderTargetUsage.PreserveContents);
+        }
+        else
+        {
+            _ssrRT = new RenderTarget2D(_device, _width, _height, false,
+                SurfaceFormat.HalfVector4, DepthFormat.None);
+        }
 
         _historyRT?.Dispose();
         _historyRT = new RenderTarget2D(_device, _width, _height, false,
@@ -79,8 +118,13 @@ public class SSRPass : IRenderPass
             || ctx.GBufferRT2 == null) return;
 
         _device.SetRenderTarget(_ssrRT);
-        _device.Clear(new Color(0, 0, 0, 0));
-        _device.DepthStencilState = DepthStencilState.None;
+        // Colour only: the aliased shared buffer still holds the GBuffer
+        // depth and the SSR stencil marks this pass tests against (a full
+        // clear would wipe both).
+        _device.Clear(ClearOptions.Target, new Color(0, 0, 0, 0), 1.0f, 0);
+        _device.DepthStencilState = SharedDepth != null
+            ? StencilReceiversOnly
+            : DepthStencilState.None;
         _device.RasterizerState = RasterizerState.CullNone;
         _device.BlendState = BlendState.Opaque;
 

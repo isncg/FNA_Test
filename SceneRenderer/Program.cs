@@ -28,6 +28,10 @@ class Program : Game
     private string[] _materialDirs = null!;
     private int _teapotMat;
     private int _floorMat;
+    // Last palette index cloned onto each object, so ApplyMaterials only
+    // re-clones when the Inspector selection actually changes.
+    private int _teapotAppliedMat = -1;
+    private int _floorAppliedMat = -1;
 
     /* Direct references instead of Objects[0]/[1]/[2]: the teapot is only added
      * when its model file exists, and index-based lookups then silently shift
@@ -45,6 +49,9 @@ class Program : Game
     private Texture2D?[] _normalMaps = null!;
     private Texture2D?[] _ormMaps = null!;
     private Texture2D? _envMap;
+
+    // Inspector panel
+    private int _inspectorTarget;
 
     // Debug
     private int _debugViewMode;
@@ -296,7 +303,10 @@ class Program : Game
     {
         var kb = Keyboard.GetState();
         if (kb.IsKeyDown(Keys.Escape)) Exit();
-        _camera.Update(true);
+        // ImGui has top priority for the mouse: don't orbit/zoom the camera
+        // while the cursor is over a panel or a slider drag is in progress.
+        bool allowCameraInput = TestHarness.Headless || !ImGuiBindings.WantCaptureMouse();
+        _camera.Update(allowCameraInput);
     }
 
     protected override void Draw(GameTime gameTime)
@@ -342,22 +352,6 @@ class Program : Game
             ImGuiBindings.ImGui_Separator();
             ImGuiBindings.ImGui_Text("View Mode");
             ImGuiBindings.Combo("Debug View", ref _debugViewMode, DebugViewNames);
-
-            ImGuiBindings.ImGui_Separator();
-            ImGuiBindings.ImGui_Text("Materials");
-            var matNames = _materialDirs.Select(Path.GetFileName).ToArray()!;
-            if (_teapotObj != null)
-            {
-                ImGuiBindings.Combo("Teapot", ref _teapotMat, matNames);
-            }
-            else
-            {
-                ImGuiBindings.ImGui_Text("Teapot: model not loaded");
-            }
-            ImGuiBindings.Combo("Floor", ref _floorMat, matNames);
-
-            // Update material assignments
-            ApplyMaterials();
 
             ImGuiBindings.ImGui_Separator();
             ImGuiBindings.ImGui_Text("SSAO");
@@ -407,6 +401,9 @@ class Program : Game
             ImGuiBindings.ImGui_SliderFloat("Bias", ref _renderer.ShadowMap.ShadowBias, 0f, 0.1f);
 
             ImGuiBindings.EndPanel();
+
+            // Inspector: select an object or light, edit its transform/material
+            DrawInspector();
         }
         else
         {
@@ -542,20 +539,127 @@ class Program : Game
     // ── Materials ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Binds the selected palette entries to the teapot and floor. Keyed on the
-    /// object references, so a missing teapot cannot shift the floor's material
-    /// onto the sphere.
+    /// Binds the selected palette entries to the teapot and floor, cloning the
+    /// palette entry so Inspector edits to metallic/roughness stay per-object
+    /// instead of leaking into every other user of the same palette material.
+    /// Keyed on the object references, so a missing teapot cannot shift the
+    /// floor's material onto the sphere.
     /// </summary>
     private void ApplyMaterials()
     {
-        if (_teapotObj != null && _teapotMat < _scene.MaterialPalette.Count)
+        if (_teapotObj != null && _teapotMat != _teapotAppliedMat
+            && _teapotMat < _scene.MaterialPalette.Count)
         {
-            _teapotObj.Material = _scene.MaterialPalette[_teapotMat];
+            _teapotObj.Material = CloneMaterial(_scene.MaterialPalette[_teapotMat]);
+            _teapotAppliedMat = _teapotMat;
         }
-        if (_floorObj != null && _floorMat < _scene.MaterialPalette.Count)
+        if (_floorObj != null && _floorMat != _floorAppliedMat
+            && _floorMat < _scene.MaterialPalette.Count)
         {
-            _floorObj.Material = _scene.MaterialPalette[_floorMat];
+            _floorObj.Material = CloneMaterial(_scene.MaterialPalette[_floorMat]);
+            _floorAppliedMat = _floorMat;
         }
+    }
+
+    private static Material CloneMaterial(Material src) => new()
+    {
+        Name = src.Name,
+        AlbedoMap = src.AlbedoMap,
+        NormalMap = src.NormalMap,
+        ORMMap = src.ORMMap,
+        AlbedoTint = src.AlbedoTint,
+        MetallicScale = src.MetallicScale,
+        RoughnessScale = src.RoughnessScale,
+    };
+
+    // ── Inspector panel ────────────────────────────────────────────
+
+    /* Selection-based editor: pick a scene object or light from the combo,
+     * then view/edit its position (direction for the directional sun, which
+     * has no position). Teapot and floor additionally expose the material
+     * palette plus metallic/roughness overrides; those edit the per-object
+     * Material clone created by ApplyMaterials.
+     */
+    private void DrawInspector()
+    {
+        ImGuiBindings.ImGui_SetNextWindowPos(
+            new ImGuiBindings.ImVec2 { x = _gdm.PreferredBackBufferWidth - 330, y = 10 },
+            ImGuiBindings.ImGuiCond_FirstUseEver);
+        ImGuiBindings.Begin("Inspector", ImGuiBindings.ImGuiWindowFlags_AlwaysAutoResize);
+
+        var objects = _scene.Objects;
+        var lights = _scene.Lights;
+
+        var names = new string[objects.Count + lights.Count];
+        for (int i = 0; i < objects.Count; i++) names[i] = objects[i].Name;
+        for (int i = 0; i < lights.Count; i++) names[objects.Count + i] = lights[i].Name;
+
+        if (_inspectorTarget >= names.Length) _inspectorTarget = names.Length - 1;
+        ImGuiBindings.Combo("Target", ref _inspectorTarget, names);
+        ImGuiBindings.ImGui_Separator();
+
+        if (_inspectorTarget < objects.Count)
+        {
+            var obj = objects[_inspectorTarget];
+
+            ImGuiBindings.ImGui_Text("Position");
+            ImGuiBindings.ImGui_SliderFloat("X##Pos", ref obj.Position.X, -10f, 10f);
+            ImGuiBindings.ImGui_SliderFloat("Y##Pos", ref obj.Position.Y, -10f, 10f);
+            ImGuiBindings.ImGui_SliderFloat("Z##Pos", ref obj.Position.Z, -10f, 10f);
+            ImGuiBindings.ImGui_Checkbox("Receives SSR", ref obj.ReceivesSSR);
+
+            // Material overrides are only tracked for the teapot and floor
+            if (obj == _teapotObj || obj == _floorObj)
+            {
+                ImGuiBindings.ImGui_Separator();
+                ImGuiBindings.ImGui_Text("Material");
+                var matNames = _scene.MaterialPalette.Select(m => m.Name).ToArray();
+                if (obj == _teapotObj)
+                    ImGuiBindings.Combo("Palette##Mat", ref _teapotMat, matNames);
+                else
+                    ImGuiBindings.Combo("Palette##Mat", ref _floorMat, matNames);
+
+                if (obj.Material != null)
+                {
+                    ImGuiBindings.ImGui_SliderFloat("Metallic##Mat",
+                        ref obj.Material.MetallicScale, 0f, 1f);
+                    ImGuiBindings.ImGui_SliderFloat("Roughness##Mat",
+                        ref obj.Material.RoughnessScale, 0f, 1f);
+                }
+            }
+        }
+        else
+        {
+            var light = lights[_inspectorTarget - objects.Count];
+            if (light is DirectionalLight dir)
+            {
+                ImGuiBindings.ImGui_Text("Direction (towards light)");
+                ImGuiBindings.ImGui_SliderFloat("X##Dir", ref dir.Direction.X, -1f, 1f);
+                ImGuiBindings.ImGui_SliderFloat("Y##Dir", ref dir.Direction.Y, -1f, 1f);
+                ImGuiBindings.ImGui_SliderFloat("Z##Dir", ref dir.Direction.Z, -1f, 1f);
+                if (dir.Direction.LengthSquared() > 1e-6f)
+                    dir.Direction = Vector3.Normalize(dir.Direction);
+            }
+            else if (light is PointLight point)
+            {
+                ImGuiBindings.ImGui_Text("Position");
+                ImGuiBindings.ImGui_SliderFloat("X##Pos", ref point.Position.X, -10f, 10f);
+                ImGuiBindings.ImGui_SliderFloat("Y##Pos", ref point.Position.Y, -10f, 10f);
+                ImGuiBindings.ImGui_SliderFloat("Z##Pos", ref point.Position.Z, -10f, 10f);
+            }
+            else if (light is SpotLight spot)
+            {
+                ImGuiBindings.ImGui_Text("Position");
+                ImGuiBindings.ImGui_SliderFloat("X##Pos", ref spot.Position.X, -10f, 10f);
+                ImGuiBindings.ImGui_SliderFloat("Y##Pos", ref spot.Position.Y, -10f, 10f);
+                ImGuiBindings.ImGui_SliderFloat("Z##Pos", ref spot.Position.Z, -10f, 10f);
+            }
+        }
+
+        // Pick up any material combo change made above
+        ApplyMaterials();
+
+        ImGuiBindings.EndPanel();
     }
 
     // ── Geometry helpers ─────────────────────────────────────────────

@@ -91,6 +91,14 @@ public class SceneCamera
                 _dragging = false;
             }
         }
+        else
+        {
+            /* Input is gated (e.g. ImGui owns the mouse). Drop any in-flight
+             * drag so the stale _lastMouse anchor cannot cause a camera jump
+             * when input is handed back; the next press starts a fresh drag.
+             */
+            _dragging = false;
+        }
 
         return _dragging || allowInput;
     }

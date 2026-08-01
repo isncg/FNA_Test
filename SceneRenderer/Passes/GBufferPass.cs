@@ -12,6 +12,24 @@ public class GBufferPass : IRenderPass
     private Effect _effect = null!;
     private int _width, _height;
 
+    /* Depth-write + stencil-mark state for objects with ReceivesSSR set. The
+     * shared buffer is D24S8; the SSR pass stencil-tests against this mark so
+     * reflections are only computed on marked surfaces (UE's r.SSR.Stencil
+     * approach). Both winding sets write the mark so triangle orientation
+     * cannot skip it.
+     */
+    private static readonly DepthStencilState DepthWriteStencilMark = new()
+    {
+        DepthBufferEnable = true,
+        DepthBufferWriteEnable = true,
+        StencilEnable = true,
+        ReferenceStencil = 1,
+        StencilFunction = CompareFunction.Always,
+        StencilPass = StencilOperation.Replace,
+        CounterClockwiseStencilFunction = CompareFunction.Always,
+        CounterClockwiseStencilPass = StencilOperation.Replace,
+    };
+
     public string Name => "GBuffer";
     public Texture2D? DebugOutput => _rt0;
 
@@ -93,6 +111,10 @@ public class GBufferPass : IRenderPass
         foreach (var obj in ctx.VisibleObjects)
         {
             if (obj.Mesh?.VertexBuffer == null || obj.Material == null) continue;
+
+            _device.DepthStencilState = obj.ReceivesSSR
+                ? DepthWriteStencilMark
+                : DepthStencilState.Default;
 
             var world = obj.LocalTransform;
             var worldViewProj = world * view * proj;

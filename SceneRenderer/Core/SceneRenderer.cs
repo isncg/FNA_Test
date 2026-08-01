@@ -66,6 +66,7 @@ public class SceneRendererEngine : IDisposable
             device, width, height, DepthFormat.Depth24Stencil8);
         GBuffer.SharedDepth = _sharedDepth;
         DeferredLighting.SharedDepth = _sharedDepth;
+        SSR.SharedDepth = _sharedDepth;
 
         foreach (var pass in _passes)
             pass.Initialize(device, width, height);
@@ -169,6 +170,7 @@ public class SceneRendererEngine : IDisposable
             _device, width, height, DepthFormat.Depth24Stencil8);
         GBuffer.SharedDepth = _sharedDepth;
         DeferredLighting.SharedDepth = _sharedDepth;
+        SSR.SharedDepth = _sharedDepth;
 
         foreach (var pass in _passes)
             pass.Resize(width, height);

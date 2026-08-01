@@ -15,6 +15,7 @@ namespace FNA.Test
 		// ---- dcimgui / Dear ImGui constants ----
 		public const int ImGuiCond_FirstUseEver = 4;    // 1 << 2
 		public const int ImGuiWindowFlags_AlwaysAutoResize = 64; // 1 << 6
+		public const int ImGuiHoveredFlags_AnyWindow = 4; // 1 << 2
 
 		// ---- ImVec2 struct matching dcimgui layout ----
 		[StructLayout(LayoutKind.Sequential)]
@@ -82,6 +83,14 @@ namespace FNA.Test
 		[DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
 		public static extern void ImGui_EndDisabled();
 
+		[DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+		[return: MarshalAs(UnmanagedType.I1)]
+		private static extern bool ImGui_IsWindowHovered(int flags);
+
+		[DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+		[return: MarshalAs(UnmanagedType.I1)]
+		public static extern bool ImGui_IsAnyItemActive();
+
 		// ---- Convenience wrappers ----
 
 		/// <summary>Begin a window with no close button.</summary>
@@ -130,6 +139,21 @@ namespace FNA.Test
 		public static void EndPanel()
 		{
 			ImGui_End();
+		}
+
+		/// <summary>
+		/// True when ImGui owns the mouse: the cursor is over any ImGui window
+		/// (open popups included), or a widget is mid-interaction (e.g. a slider
+		/// being dragged, which stays active even if the cursor leaves the
+		/// window). Reconstructs io.WantCaptureMouse without marshalling the
+		/// version-sensitive ImGuiIO struct. Gate app-level mouse handling
+		/// (camera orbit, etc.) on this. State reflects the previous ImGui
+		/// frame, which is the standard Dear ImGui consumption pattern.
+		/// </summary>
+		public static bool WantCaptureMouse()
+		{
+			return ImGui_IsWindowHovered(ImGuiHoveredFlags_AnyWindow)
+				|| ImGui_IsAnyItemActive();
 		}
 	}
 }

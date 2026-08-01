@@ -13,6 +13,14 @@ public class SceneObject
     public Quaternion Rotation = Quaternion.Identity;
     public Vector3 Scale = Vector3.One;
 
+    /// <summary>
+    /// Whether this object's surfaces receive SSR reflections. The GBuffer
+    /// pass writes a stencil mark for marked objects and the SSR pass only
+    /// computes reflections on marked pixels (UE's r.SSR.Stencil approach);
+    /// unmarked surfaces fall back to the IBL specular.
+    /// </summary>
+    public bool ReceivesSSR = true;
+
     public Matrix LocalTransform
         => Matrix.CreateScale(Scale)
          * Matrix.CreateFromQuaternion(Rotation)

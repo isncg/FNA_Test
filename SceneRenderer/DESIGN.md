@@ -71,6 +71,14 @@ Note: with the stock material palette every surface is rougher than the default
 a glossier material is selected). The headless regression test stages a glossy
 floor + boosted sun to drive a measurable reflection.
 
+Reception is per-object: `SceneObject.ReceivesSSR` (default true) makes the
+GBuffer pass write a stencil mark (the shared buffer is D24S8), and the SSR
+pass stencil-tests `Equal 1` so reflections are only computed on marked
+surfaces — UE's `r.SSR.Stencil` masking approach; unmarked objects fall back to
+the IBL specular. For the test to see the marks, `_ssrRT` aliases the shared
+depth buffer (`PreserveContents`) and is cleared colour-only, the same
+discipline as DeferredLighting.
+
 ## GBuffer Layout (3 MRTs + Depth)
 
 | RT | Format | R | G | B | A |
