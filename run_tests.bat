@@ -343,21 +343,25 @@ dotnet build "!PROJPATH!" --nologo -clp:NoSummary >nul 2>&1
 if !ERRORLEVEL! neq 0 (
     echo   =^> BUILD FAIL
     set /a FAIL+=1
-    if "!FAILED_TESTS!"=="" (set FAILED_TESTS=!DISPNAME!(build)) else (set FAILED_TESTS=!FAILED_TESTS! !DISPNAME!(build))
+    if "!FAILED_TESTS!"=="" (set "FAILED_TESTS=!DISPNAME!(build)") else (set "FAILED_TESTS=!FAILED_TESTS! !DISPNAME!(build)")
     exit /b 1
 )
 
 REM Copy DLLs
 if exist "%FNA3D_BUILD%\FNA3D.dll" (
-    copy /y "%FNA3D_BUILD%\FNA3D.dll" "!OUTDIR!\" >nul 2>&1
+    xcopy /d /y /q "%FNA3D_BUILD%\FNA3D.dll" "!OUTDIR!\" >nul 2>&1
 )
 if exist "%SDL3_DLL%" (
-    copy /y "%SDL3_DLL%" "!OUTDIR!\" >nul 2>&1
+    xcopy /d /y /q "%SDL3_DLL%" "!OUTDIR!\" >nul 2>&1
 )
 
 REM Run (single invocation, pipe to findstr)
+REM NOTE: Use `dotnet <dll>` directly instead of `dotnet run`. `dotnet run`
+REM launches the app in a way that fails to resolve native SDL3.dll/FNA3D.dll
+REM from the output dir (DllNotFoundException), while `dotnet <dll>` resolves
+REM them correctly from the app base directory.
 if "%HEADLESS_ONLY%"=="1" set EXTRA=--headless
-dotnet run --no-build --project "!PROJPATH!" -- !EXTRA! 2>&1 | findstr /c:"RESULT:.*PASS" >nul
+dotnet "%OUTDIR%\%PROJ%.dll" %EXTRA% 2>&1 | findstr "RESULT:.*PASS" >nul
 if !ERRORLEVEL! equ 0 (
     echo   =^> PASS
     set /a PASS+=1
@@ -416,10 +420,10 @@ if !ERRORLEVEL! neq 0 (
 
 REM Copy DLLs
 if exist "%FNA3D_BUILD%\FNA3D.dll" (
-    copy /y "%FNA3D_BUILD%\FNA3D.dll" "%PANEL_OUTDIR%\" >nul 2>&1
+    xcopy /d /y /q "%FNA3D_BUILD%\FNA3D.dll" "%PANEL_OUTDIR%\" >nul 2>&1
 )
 if exist "%SDL3_DLL%" (
-    copy /y "%SDL3_DLL%" "%PANEL_OUTDIR%\" >nul 2>&1
+    xcopy /d /y /q "%SDL3_DLL%" "%PANEL_OUTDIR%\" >nul 2>&1
 )
 
 set GUI_PASS=0
@@ -429,7 +433,7 @@ for /L %%i in (1,1,38) do (
     set NUM=!NUM:~-2!
     set TEST_NAME=G!NUM!
 
-    dotnet run --no-build --project "%PANEL_PROJ%" -- --headless --test !TEST_NAME! 2>&1 | findstr /c:"RESULT:.*PASS" >nul
+    dotnet "%PANEL_OUTDIR%\Panel.dll" --headless --test !TEST_NAME! 2>&1 | findstr "RESULT:.*PASS" >nul
     if !ERRORLEVEL! equ 0 (
         set /a GUI_PASS+=1
     ) else (
