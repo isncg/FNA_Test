@@ -4,13 +4,15 @@
 //   t0/s0: GBufferRT0 (albedo.RGB, bakedAO.A)
 //   t1/s1: GBufferRT1 (worldNormal.RGB*0.5+0.5, roughness.A)
 //   t2/s2: GBufferRT2 (metallic.R, linearDepth.G)
+//   t3/s3: SceneHistory (previous frame's lit HDR, after the skybox pass)
 //
 // Algorithm:
 //   1. Reconstruct view-space position from depth + inverse projection
 //   2. Compute view-space reflection direction R = reflect(V, N)
 //   3. Linear ray march along R in view space
 //   4. At each step, project to screen UV, compare depth
-//   5. On hit: sample albedo, apply Fresnel fade + roughness blur
+//   5. On hit: reproject the hit into the previous frame and sample the lit
+//      history (UE5-style), apply Fresnel fade + roughness blur
 //   6. On miss: return transparent (fallback to IBL in lighting pass)
 //   7. Edge fade to avoid pop at screen borders
 
@@ -20,12 +22,15 @@ Texture2D    GBufferRT1      : register(t1);
 SamplerState GBuffer1Sampler : register(s1);
 Texture2D    GBufferRT2      : register(t2);
 SamplerState GBuffer2Sampler : register(s2);
+Texture2D    SceneHistory    : register(t3);
+SamplerState HistorySampler  : register(s3);
 
 float4x4 ViewProj       : register(c0);
 float4x4 InvViewProj    : register(c4);
 float3   EyePosition    : register(c8);
 float4   SSRParams      : register(c11); // x=maxSteps, y=stepSize, z=maxRoughness, w=fadeDistance
 float4x4 Projection     : register(c12);
+float4x4 PrevViewProj   : register(c16); // reproject hits into the previous frame
 
 #define SSR_MAX_STEPS      int(SSRParams.x)
 #define SSR_STEP_SIZE      SSRParams.y
@@ -129,30 +134,50 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
         float depthDiff = rayPos.z - sampleDepth;
         if (depthDiff > 0.0 && depthDiff < 0.5)
         {
-            // Hit: sample albedo
-            float3 hitAlbedo = GBufferRT0.Sample(GBuffer0Sampler, sampleUV).rgb;
-
             // Fresnel fading based on step distance
             float fade = 1.0 - (float(i) / float(steps));
             fade = smoothstep(0.0, 1.0, fade);
 
-            // Roughness blur approximation (cone-tracing)
-            float blurRadius = roughness * 2.0;
-            float2 texelSize = float2(1.0 / rtW, 1.0 / rtH);
-            float3 blurredColor = float3(0, 0, 0);
-            [unroll]
-            for (int bx = -1; bx <= 1; bx++)
-            {
-                [unroll]
-                for (int by = -1; by <= 1; by++)
-                {
-                    blurredColor += GBufferRT0.Sample(GBuffer0Sampler,
-                        sampleUV + float2(bx, by) * texelSize * blurRadius).rgb;
-                }
-            }
-            blurredColor /= 9.0;
+            // UE5-style temporal reflection: sample the previous frame's lit
+            // HDR scene (direct light + IBL + sky already included) instead of
+            // the flat GBuffer albedo. Reconstruct the hit's world position,
+            // reproject it into the previous frame, and sample the history.
+            float3 hitViewRH = float3(rayPos.x, rayPos.y, -rayPos.z);
+            float4 hitWorldH = mul(float4(hitViewRH, 1.0), invView);
+            float3 hitWorld = hitWorldH.xyz / hitWorldH.w;
 
-            reflectionColor = float4(blurredColor * fade, fade);
+            float4 prevClip = mul(float4(hitWorld, 1.0), PrevViewProj);
+            float2 prevUV;
+            prevUV.x = (prevClip.x / prevClip.w) * 0.5 + 0.5;
+            prevUV.y = (1.0 - prevClip.y / prevClip.w) * 0.5;
+
+            float3 hitColor;
+            if (prevUV.x < 0.0 || prevUV.x > 1.0 || prevUV.y < 0.0 || prevUV.y > 1.0)
+            {
+                // Disoccluded / off-screen in the previous frame: degrade to the
+                // flat albedo rather than smearing clamped history edge texels.
+                hitColor = GBufferRT0.Sample(GBuffer0Sampler, sampleUV).rgb;
+            }
+            else
+            {
+                // Roughness blur approximation (cone-tracing) in history space
+                float blurRadius = roughness * 2.0;
+                float2 texelSize = float2(1.0 / rtW, 1.0 / rtH);
+                hitColor = float3(0, 0, 0);
+                [unroll]
+                for (int bx = -1; bx <= 1; bx++)
+                {
+                    [unroll]
+                    for (int by = -1; by <= 1; by++)
+                    {
+                        hitColor += SceneHistory.Sample(HistorySampler,
+                            prevUV + float2(bx, by) * texelSize * blurRadius).rgb;
+                    }
+                }
+                hitColor /= 9.0;
+            }
+
+            reflectionColor = float4(hitColor * fade, fade);
             break;
         }
     }

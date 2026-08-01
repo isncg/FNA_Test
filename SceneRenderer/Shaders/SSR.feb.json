@@ -22,6 +22,7 @@
     { "name": "InvViewProj", "type": "MATRIX", "register": 4 },
     { "name": "EyePosition", "type": "FLOAT3", "register": 8 },
     { "name": "SSRParams",   "type": "FLOAT4", "register": 11 },
-    { "name": "Projection",  "type": "MATRIX", "register": 12 }
+    { "name": "Projection",  "type": "MATRIX", "register": 12 },
+    { "name": "PrevViewProj", "type": "MATRIX", "register": 16 }
   ]
 }

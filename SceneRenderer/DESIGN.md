@@ -13,7 +13,7 @@ Program.cs (Game subclass)
         ├── ShadowMapPass    → _shadowMap (R32F, 2048x2048)
         ├── GBufferPass      → RT0 (Color RGBA8), RT1 (HalfVector4), RT2 (HalfVector4) + fills _sharedDepth
         ├── SSAOPass         → _ssaoRT (R32F) → BlurAOPass → _ssaoBlurRT (R32F)
-        ├── SSRPass          → _ssrRT (HalfVector4)
+        ├── SSRPass          → _ssrRT (HalfVector4) + _historyRT (HalfVector4, previous-frame HDR)
         ├── DeferredLightingPass → _hdrSceneRT (HalfVector4, clears colour only)
         ├── SkyboxPass       → _hdrSceneRT (depth-tested against _sharedDepth)
         ├── BloomPass        → bloom chain (HalfVector4)
@@ -42,6 +42,35 @@ Rules that keep this working:
 This replaced the earlier approach where the Skybox sampled GBuffer RT2's linear
 depth and called `discard`, blending additively.
 
+## Temporal SSR Reflections (UE5-style)
+
+SSR reflects the **previous frame's lit HDR scene** rather than the flat GBuffer
+albedo, matching UE5's screen-space reflections. Because the SSR pass runs before
+deferred lighting, the current frame's lit colour does not exist yet; instead the
+ray-march hit is reprojected into the previous frame and samples a history buffer
+that already contains direct light, IBL and the sky.
+
+Data flow:
+
+- `SSRPass` owns `_historyRT` (HalfVector4). After the Skybox pass each frame,
+  `SceneRendererEngine` calls `SSRPass.UpdateHistory(ctx)`, which copies the
+  fully-lit `HdrSceneRT` (sky included) into `_historyRT` using the DebugView
+  effect as a fullscreen RGB passthrough.
+- On a ray-march hit the shader reconstructs the hit's world position, reprojects
+  it with `PrevViewProj`, and samples `_historyRT` (3x3 cone-trace blur for
+  roughness). If the reprojected UV falls off-screen (disocclusion) it degrades
+  to the flat albedo.
+- On a miss the shader returns transparent and the lighting pass falls back to
+  the prefiltered IBL specular, exactly as before.
+
+The first frame's history is cleared to black, so it degrades to the albedo
+fallback rather than sampling uninitialized memory.
+
+Note: with the stock material palette every surface is rougher than the default
+`SSRPass.MaxRoughness` (0.6), so SSR is inactive until that slider is raised (or
+a glossier material is selected). The headless regression test stages a glossy
+floor + boosted sun to drive a measurable reflection.
+
 ## GBuffer Layout (3 MRTs + Depth)
 
 | RT | Format | R | G | B | A |
@@ -58,7 +87,7 @@ depth and called `discard`, blending additively.
 | DeferredLighting | FS triangle | t0-8: GBuffer×3, SSAO, SSR, Shadow, Irr, Prefilt, BrdfLut | c0:EyePos, c3:Ambient, c8:LightData[64] |
 | SSAO | FS triangle | t0-1: GBuffer1, GBuffer2 | c0:Projection, c4:SSAOParams |
 | BlurAO | FS triangle | t0-1: AORT, GBuffer2 | c0:TexelSize, c1:BlurSharpness |
-| SSR | FS triangle | t0-2: GBuffer×3 | c0:ViewProj, c4:InvViewProj, c11:SSRParams |
+| SSR | FS triangle | t0-2: GBuffer×3, t3: SceneHistory | c0:ViewProj, c4:InvViewProj, c11:SSRParams, c16:PrevViewProj |
 | ShadowMap | VS+PS (PNT) | none | c0:WorldViewProj |
 | Skybox | FS triangle | t0:EnvMap | c0:CameraForward, c3:FovParams |
 | Bloom | FS triangle | t0:Input | c0:Threshold, c2:ShaderIndex |
@@ -87,7 +116,7 @@ depth and called `discard`, blending additively.
 ## Key Algorithms
 
 - **PBR**: Cook-Torrance GGX, Smith geometry, Schlick Fresnel, Disney diffuse, split-sum IBL
-- **SSR**: Linear ray marching in view space, roughness-adaptive steps, cone-trace blur
+- **SSR**: Linear ray marching in view space, roughness-adaptive steps, cone-trace blur; UE5-style temporal reflections sample the previous frame's lit HDR history (see below)
 - **SSAO**: 32 hemisphere samples, interleaved gradient noise, angle-adaptive radius
 - **Bloom**: Bright extract → 4-step downsample → 4-step upsample (Karis 2013 tent filter)
 - **Shadows**: Single directional shadow map, 2048x2048 R32F, 3x3 PCF

@@ -6,11 +6,18 @@ using Microsoft.Xna.Framework.Graphics;
 namespace SceneRenderer;
 
 /// <summary>Screen-Space Reflections via linear ray marching.</summary>
+/// <remarks>
+/// UE5-style temporal reflections: hits sample the previous frame's lit HDR
+/// scene (direct light + IBL + sky) rather than the flat GBuffer albedo. The
+/// history buffer is refreshed after the skybox pass via <see cref="UpdateHistory"/>.
+/// </remarks>
 public class SSRPass : IRenderPass
 {
     private GraphicsDevice _device = null!;
     private Effect _effect = null!;
+    private Effect _copyEffect = null!;
     private RenderTarget2D _ssrRT = null!;
+    private RenderTarget2D _historyRT = null!;
     private int _width, _height;
 
     public string Name => "SSR";
@@ -33,6 +40,14 @@ public class SSRPass : IRenderPass
         stream.CopyTo(ms);
         _effect = new Effect(device, ms.ToArray());
 
+        // Reuse the DebugView effect (channel 0 = RGB passthrough) as a
+        // fullscreen copy for maintaining the temporal history buffer.
+        using var copyStream = typeof(SSRPass).Assembly
+            .GetManifestResourceStream("SceneRenderer.Shaders.DebugView.feb")!;
+        using var copyMs = new MemoryStream();
+        copyStream.CopyTo(copyMs);
+        _copyEffect = new Effect(device, copyMs.ToArray());
+
         CreateRT();
     }
 
@@ -41,6 +56,15 @@ public class SSRPass : IRenderPass
         _ssrRT?.Dispose();
         _ssrRT = new RenderTarget2D(_device, _width, _height, false,
             SurfaceFormat.HalfVector4, DepthFormat.None);
+
+        _historyRT?.Dispose();
+        _historyRT = new RenderTarget2D(_device, _width, _height, false,
+            SurfaceFormat.HalfVector4, DepthFormat.None);
+        // Start from a known-black history so the first frame degrades to the
+        // disocclusion fallback instead of sampling uninitialized memory.
+        _device.SetRenderTarget(_historyRT);
+        _device.Clear(Color.Black);
+        _device.SetRenderTarget(null);
     }
 
     public void Resize(int width, int height)
@@ -66,11 +90,14 @@ public class SSRPass : IRenderPass
         _device.SamplerStates[1] = SamplerState.PointClamp;
         _device.Textures[2] = ctx.GBufferRT2;
         _device.SamplerStates[2] = SamplerState.PointClamp;
+        _device.Textures[3] = _historyRT;
+        _device.SamplerStates[3] = SamplerState.LinearClamp;
 
         _effect.Parameters["ViewProj"].SetValue(ctx.Camera.ViewProjectionMatrix);
         _effect.Parameters["InvViewProj"].SetValue(ctx.Camera.InvViewProjection);
         _effect.Parameters["EyePosition"].SetValue(ctx.Camera.GetEyePosition());
         _effect.Parameters["Projection"].SetValue(ctx.Camera.ProjectionMatrix);
+        _effect.Parameters["PrevViewProj"].SetValue(ctx.PrevViewProj);
         _effect.Parameters["SSRParams"].SetValue(
             new Vector4(MaxSteps, StepSize, MaxRoughness, FadeDistance));
 
@@ -81,9 +108,35 @@ public class SSRPass : IRenderPass
         ctx.SSRRT = _ssrRT;
     }
 
+    /// <summary>
+    /// Copies the fully-lit HDR scene (after the skybox pass) into the history
+    /// buffer so the next frame's SSR can reflect it. Must be called after the
+    /// Skybox pass each frame.
+    /// </summary>
+    public void UpdateHistory(RenderContext ctx)
+    {
+        if (ctx.HdrSceneRT == null) return;
+
+        _device.SetRenderTarget(_historyRT);
+        _device.DepthStencilState = DepthStencilState.None;
+        _device.RasterizerState = RasterizerState.CullNone;
+        _device.BlendState = BlendState.Opaque;
+
+        _device.Textures[0] = ctx.HdrSceneRT;
+        _device.SamplerStates[0] = SamplerState.PointClamp;
+
+        _copyEffect.Parameters["DebugChannel"].SetValue(0f); // RGB passthrough
+        _copyEffect.CurrentTechnique!.Passes[0].Apply();
+        _device.DrawPrimitives(PrimitiveType.TriangleList, 0, 3);
+
+        _device.SetRenderTarget(null);
+    }
+
     public void Dispose()
     {
         _effect?.Dispose();
+        _copyEffect?.Dispose();
         _ssrRT?.Dispose();
+        _historyRT?.Dispose();
     }
 }

@@ -127,6 +127,11 @@ public class SceneRendererEngine : IDisposable
         if (Skybox.Enabled)
             Skybox.Execute(ctx);
 
+        // Refresh the SSR temporal history with this frame's fully-lit HDR
+        // scene (sky included) so next frame's reflections contain the IBL.
+        if (SSR.Enabled)
+            SSR.UpdateHistory(ctx);
+
         // Pass 8: Bloom
         if (Bloom.Enabled)
         {

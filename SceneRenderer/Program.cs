@@ -40,6 +40,7 @@ class Program : Game
     // Headless skybox/shared-depth verification state
     private int _headlessFrame;
     private Color[]? _skyOnPixels;
+    private int _pendingFails;
     private Texture2D?[] _albedoMaps = null!;
     private Texture2D?[] _normalMaps = null!;
     private Texture2D?[] _ormMaps = null!;
@@ -421,6 +422,16 @@ class Program : Game
              */
             _headlessFrame += 1;
 
+            // Boost the sun so sunlit diffuse surfaces exceed 1.0 in the HDR
+            // scene. The temporal-SSR check needs HDR (>1.0) content in the
+            // reflection; with the stock sun (4.0) only tiny specular highlights
+            // top 1.0 and the floor->teapot reflection path misses them, whereas
+            // a bright sunlit floor is reliably reflected. Safe for the other
+            // checks: they are brightness-invariant and compare identical-sun
+            // frames.
+            if (_scene.SunLight != null)
+                _scene.SunLight.Intensity = 15f;
+
             if (_headlessFrame == 3)
             {
                 _skyOnPixels = TestHarness.ReadBackbuffer(GraphicsDevice);
@@ -507,6 +518,21 @@ class Program : Game
                 // were used without a view-space transform).
                 fails += CheckSsaoBlackSpots(_renderer.LastContext!);
 
+                // Static-scene checks are done. Now stage the temporal-SSR
+                // scenario: a glossy floor + SSR enabled at any roughness, so the
+                // next render produces measurable reflections (the rough stock
+                // floor blurs HDR highlights below 1.0, and the default
+                // MaxRoughness 0.6 skips SSR entirely).
+                _renderer.SSR.MaxRoughness = 1.0f;
+                if (_floorObj?.Material != null)
+                    _floorObj.Material.RoughnessScale = 0.05f;
+                _pendingFails = fails;
+            }
+            else if (_headlessFrame == 5)
+            {
+                // LastContext is frame 4, whose SSR buffer sampled frame 3's lit
+                // history — verify the reflections carry HDR lighting.
+                int fails = _pendingFails + CheckSsrTemporal(_renderer.LastContext!);
                 TestHarness.Report("SceneRenderer", fails);
                 Exit();
             }
@@ -669,6 +695,59 @@ class Program : Game
             Console.WriteLine(
                 $"FAIL [ssao-blackspot]: {darkRatio:P1} of camera-facing convex pixels " +
                 $"are occluded — the SSAO hemisphere is sampling into the surface");
+            return 1;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Verifies SSR reflects the lit scene (UE5-style temporal reflection) and
+    /// not the flat GBuffer albedo. The history buffer is HDR, so a reflection
+    /// that sampled it can exceed 1.0; the GBuffer albedo is LDR (&lt;=1.0), so the
+    /// old albedo-sampling SSR could never produce values above 1.0. HDR values
+    /// in the SSR buffer therefore prove the temporal-history path is active.
+    /// </summary>
+    private int CheckSsrTemporal(RenderContext ctx)
+    {
+        if (ctx.SSRRT == null)
+        {
+            Console.WriteLine("FAIL [ssr-temporal]: SSR target unavailable");
+            return 1;
+        }
+
+        int w = ctx.Width, h = ctx.Height;
+        var ssr = new Microsoft.Xna.Framework.Graphics.PackedVector.HalfVector4[w * h];
+        ctx.SSRRT.GetData(ssr);
+
+        int active = 0, hdr = 0;
+        float maxC = 0f;
+        for (int i = 0; i < w * h; i += 1)
+        {
+            Vector4 c = ssr[i].ToVector4();
+            float m = Math.Max(c.X, Math.Max(c.Y, c.Z));
+            if (c.W > 0.001f) active += 1;
+            if (m > maxC) maxC = m;
+            if (m > 1.0f) hdr += 1;
+        }
+
+        // Guard: SSR must actually have found reflections, otherwise an empty
+        // buffer would pass the HDR check vacuously (e.g. if the glossy-floor
+        // staging regressed or the ray march stopped hitting).
+        if (active == 0)
+        {
+            Console.WriteLine("FAIL [ssr-temporal]: SSR buffer is empty — no reflections found");
+            return 1;
+        }
+
+        Console.WriteLine(
+            $"[SceneRenderer] SSR temporal: {active} reflection pixels, " +
+            $"{hdr} HDR (>1.0), max={maxC:F3}");
+
+        if (hdr == 0)
+        {
+            Console.WriteLine(
+                "FAIL [ssr-temporal]: no HDR values in the SSR buffer — reflections " +
+                "are sampling the LDR albedo instead of the lit history");
             return 1;
         }
         return 0;
