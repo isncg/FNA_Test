@@ -644,6 +644,26 @@ class Program : Game
             $"[SceneRenderer] SSAO blackspot: {dark}/{facing} camera-facing " +
             $"geometry pixels are dark ({darkRatio:P1})");
 
+        // Guard against the opposite failure mode — AO silently disabled
+        // (everything 1.0) would also pass the blackspot check. The teapot's
+        // lid/body seam, handle and floor contact must still occlude.
+        int occluded = 0;
+        for (int i = 0; i < w * h; i += 1)
+        {
+            float viewZ = rt2[i].ToVector4().Y;
+            if (viewZ <= 0.1f || viewZ >= 100f) continue;
+            if (ssao[i] < 0.85f) occluded += 1;
+        }
+        Console.WriteLine($"[SceneRenderer] SSAO active: {occluded} geometry pixels show occlusion (<0.85)");
+
+        if (occluded == 0)
+        {
+            Console.WriteLine(
+                "FAIL [ssao-disabled]: no geometry pixel is occluded — AO is " +
+                "producing nothing, which would also mask the blackspot bug");
+            return 1;
+        }
+
         if (darkRatio > 0.02f)
         {
             Console.WriteLine(
