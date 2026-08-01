@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="../Common/ImGuiBindings.cs" />
     <Compile Include="../Common/ImGuiTestHarness.cs" />
+    <Compile Include="../Common/GlutTeapot.cs" />
     <Compile Include="../Common/TestHarness.cs" />
   </ItemGroup>
 

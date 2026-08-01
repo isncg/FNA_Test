@@ -119,6 +119,19 @@ colour, renormalised vectors for normal maps, plain averages for masks — since
 box-filtering sRGB-encoded values directly would darken each level. Cost is
 ~2.3 s for 24 2048² textures (12 levels each), mostly JPEG decode.
 
+## Procedural Teapot Geometry
+
+The teapot is generated the way GLUT's `glutSolidTeapot` does it
+(`Common/GlutTeapot.cs`): the 10 bicubic Bezier patches from `glut_teapot.c`,
+mirrored into 32, tessellated on a uniform parameter grid. This replaced a
+pre-triangulated `.tris` dump that carried no normals or texcoords, so both had
+to be guessed from vertex positions — normals by welding coincident vertices and
+UVs by projection, which collapsed 80% of the mesh onto a single texture row.
+Evaluating the patches directly gives UVs straight from the parameter domain
+(each patch maps to `[0,1]²`) and normals from the analytic partial derivatives
+`∂S/∂u × ∂S/∂v`, which is outward for every mirrored variant, so no per-variant
+winding fix-up is needed.
+
 ## Known Issues
 
 - **Material source format**: the maps are JPEG. Measured from the SOF markers,
@@ -141,7 +154,3 @@ box-filtering sRGB-encoded values directly would darken each level. Cost is
   stored in 8 bits, which under-serves the darks. Unreal encodes base colour
   before storing it in the GBuffer for this reason. A cheap fix is to store
   `sqrt(albedo)` and square it in the lighting pass.
-- **Teapot mesh attributes**: the `.tris` source has neither normals nor
-  texcoords, so `TeapotModel.Load` averages face normals across *all* vertices
-  (an O(n²) pass over 10464 vertices) and generates UVs by cylindrical
-  projection. That UV scheme interacts badly with the tangent issue above.

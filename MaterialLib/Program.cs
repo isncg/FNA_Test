@@ -232,23 +232,17 @@ class Program : Game
             SurfaceFormat.Single, DepthFormat.Depth24Stencil8);
 
         // ── Teapot ──────────────────────────────────────────────────────────
-        string[] teapotCandidates =
-        {
-            "../../FNA3D_HLSL_Test/assets/models/teapot_bezier0.tris",
-            Path.Combine(AppContext.BaseDirectory,
-                "..", "..", "..", "..", "..",
-                "FNA3D_HLSL_Test", "assets", "models", "teapot_bezier0.tris"),
-        };
-        var teapotPath = teapotCandidates.FirstOrDefault(File.Exists)
-            ?? throw new FileNotFoundException(
-                "Cannot find teapot model. Tried: " + string.Join(", ", teapotCandidates));
-
-        Console.WriteLine($"Loading teapot from: {Path.GetFullPath(teapotPath)}");
-        var (verts, triCount) = TeapotModel.Load(teapotPath);
-        _teapotPrims = triCount;
-        _teapotVB = new VertexBuffer(GraphicsDevice, TeapotModel.VertexDeclaration,
+        /* Generated from GLUT's 32 Bezier patches instead of a .tris dump: UVs
+         * come from the patch parameter domain and normals from the analytic
+         * derivatives, so nothing has to be inferred from vertex positions.
+         * scale 2 keeps the ~3.15 unit height the loaded mesh had.
+         */
+        var verts = GlutTeapot.Build(grid: 10, scale: 2f);
+        _teapotPrims = verts.Length / 3;
+        _teapotVB = new VertexBuffer(GraphicsDevice, typeof(VertexPositionNormalTexture),
             verts.Length, BufferUsage.WriteOnly);
         _teapotVB.SetData(verts);
+        Console.WriteLine($"Teapot: {_teapotPrims} triangles from 32 Bezier patches (grid 10)");
 
         // Position teapot so its bottom rests on the floor (Y = 0)
         float teapotYMin = verts.Min(v => v.Position.Y);

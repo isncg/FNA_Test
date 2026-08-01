@@ -16,6 +16,7 @@
     <Compile Include="../Common/ImGuiTestHarness.cs" />
     <Compile Include="../Common/TestHarness.cs" />
     <Compile Include="../Common/GeometryGen.cs" />
+    <Compile Include="../Common/GlutTeapot.cs" />
     <Compile Include="../Common/TextureGen.cs" />
   </ItemGroup>
 

@@ -88,58 +88,37 @@ class Program : Game
         };
 
         // ── Teapot ──────────────────────────────────────────────────────────
-        string[] teapotCandidates =
-        {
-            Path.Combine(AppContext.BaseDirectory, "assets", "models", "teapot_bezier0.tris"),
-            "../assets/models/teapot_bezier0.tris",
-            "../../assets/models/teapot_bezier0.tris",
-            "../../../assets/models/teapot_bezier0.tris",
-            "../../../../assets/models/teapot_bezier0.tris",
-            // Legacy location from before this repo was renamed to FNA_Test
-            "../../FNA3D_HLSL_Test/assets/models/teapot_bezier0.tris",
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-                "FNA3D_HLSL_Test", "assets", "models", "teapot_bezier0.tris"),
-        };
-        var teapotPath = teapotCandidates.FirstOrDefault(File.Exists);
-        if (teapotPath != null)
-        {
-            Console.WriteLine($"Loading teapot from: {Path.GetFullPath(teapotPath)}");
-            var (verts, triCount) = TeapotModel.Load(teapotPath);
-            _teapotPrims = triCount;
-            _teapotVB = new VertexBuffer(GraphicsDevice, typeof(TeapotModel.Vertex),
-                verts.Length, BufferUsage.WriteOnly);
-            _teapotVB.SetData(verts);
+        /* Generated the way GLUT does it, from the 32 Bezier patches, rather
+         * than loaded from a pre-triangulated dump. That gives UVs straight
+         * from the patch parameter domain and analytic normals — the .tris file
+         * carried neither, so both had to be guessed from vertex positions.
+         *
+         * scale 2 puts the height at ~3.15 units, matching the old mesh.
+         */
+        var teapotVerts = GlutTeapot.Build(grid: 10, scale: 2f);
+        _teapotPrims = teapotVerts.Length / 3;
+        _teapotVB = new VertexBuffer(GraphicsDevice, typeof(VertexPositionNormalTexture),
+            teapotVerts.Length, BufferUsage.WriteOnly);
+        _teapotVB.SetData(teapotVerts);
 
-            float teapotYMin = verts.Min(v => v.Position.Y);
-            var teapotWorld = Matrix.CreateTranslation(0, -teapotYMin, 0);
-            _scene.Objects.Add(new SceneObject
+        float teapotYMin = teapotVerts.Min(v => v.Position.Y);
+        Console.WriteLine($"Teapot: {_teapotPrims} triangles from 32 Bezier patches " +
+            $"(grid 10), height {teapotVerts.Max(v => v.Position.Y) - teapotYMin:F2}");
+
+        _scene.Objects.Add(new SceneObject
+        {
+            Name = "Teapot",
+            Mesh = new Mesh
             {
                 Name = "Teapot",
-                Mesh = new Mesh
-                {
-                    Name = "Teapot",
-                    VertexBuffer = _teapotVB,
-                    PrimitiveCount = _teapotPrims,
-                    VertexCount = verts.Length,
-                    Bounds = ComputeBounds(verts),
-                },
-                Position = new Vector3(0, -teapotYMin, 0),
-            });
-            _teapotObj = _scene.Objects[_scene.Objects.Count - 1];
-        }
-        else
-        {
-            /* Without this warning the teapot is silently absent, and any
-             * index-based material assignment silently shifts onto the wrong
-             * object.
-             */
-            Console.WriteLine("[WARN] Teapot model not found; the scene will " +
-                "have no teapot. Searched:");
-            foreach (var c in teapotCandidates)
-            {
-                Console.WriteLine($"         {Path.GetFullPath(c)}");
-            }
-        }
+                VertexBuffer = _teapotVB,
+                PrimitiveCount = _teapotPrims,
+                VertexCount = teapotVerts.Length,
+                Bounds = ComputeBounds(teapotVerts),
+            },
+            Position = new Vector3(0, -teapotYMin, 0),
+        });
+        _teapotObj = _scene.Objects[_scene.Objects.Count - 1];
 
         // ── Floor ────────────────────────────────────────────────────────────
         var floorVerts = CreateFloor(8f, 4);
@@ -617,6 +596,21 @@ class Program : Game
         return new BoundingSphere(center, MathF.Sqrt(r2));
     }
 
+    /// <summary>Same bounds computation for the stock PNT vertex type.</summary>
+    private static BoundingSphere ComputeBounds(VertexPositionNormalTexture[] verts)
+    {
+        var center = Vector3.Zero;
+        foreach (var v in verts) center += v.Position;
+        center /= verts.Length;
+        float r2 = 0;
+        foreach (var v in verts)
+        {
+            float d2 = Vector3.DistanceSquared(v.Position, center);
+            if (d2 > r2) r2 = d2;
+        }
+        return new BoundingSphere(center, MathF.Sqrt(r2));
+    }
+
     // ── IBL precompute ─────────────────────────────────────────────────────
 
     private Texture2D GenerateIrradianceMap(Texture2D envMap)
@@ -774,9 +768,12 @@ class Program : Game
         throw new DirectoryNotFoundException("Cannot find assets/materials");
     }
 
-    // ── TeapotModel import ──────────────────────────────────────────────────
+    // ── Mesh vertex type ───────────────────────────────────────────────────────
 
-    // Imported from MaterialLib — simplified for SceneRenderer use
+    /* PNT layout for the procedural floor and sphere. The teapot uses the stock
+     * VertexPositionNormalTexture (same layout) via GlutTeapot; the .tris loader
+     * that used to live here is gone.
+     */
     private static class TeapotModel
     {
         public struct Vertex : IVertexType
@@ -793,79 +790,6 @@ class Program : Game
                 new VertexElement(24, VertexElementFormat.Vector2, VertexElementUsage.TextureCoordinate, 0));
 
             readonly VertexDeclaration IVertexType.VertexDeclaration => VertexDeclaration;
-        }
-
-        public static (Vertex[], int) Load(string path)
-        {
-            // .tris format: first line = vertex count, then triangles as raw XYZ triples
-            var lines = File.ReadAllLines(path);
-            if (lines.Length < 4)
-                throw new InvalidDataException($"Not enough data in {path}");
-
-            var positions = new System.Collections.Generic.List<Vector3>();
-            for (int i = 1; i < lines.Length; i++)
-            {
-                var line = lines[i].Trim();
-                if (string.IsNullOrEmpty(line)) continue;
-                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 3)
-                    positions.Add(new Vector3(
-                        float.Parse(parts[0]), float.Parse(parts[1]), float.Parse(parts[2])));
-            }
-
-            var verts = new System.Collections.Generic.List<Vertex>();
-            // Process triangles (every 3 positions = one face)
-            for (int i = 0; i + 2 < positions.Count; i += 3)
-            {
-                var p0 = positions[i];
-                var p1 = positions[i + 1];
-                var p2 = positions[i + 2];
-
-                // Compute face normal (p2 swapped for CW winding → CullCounterClockwise)
-                // Cross(p1-p0, p2-p0) gives outward normal for CW {p0,p2,p1} in RH coords
-                var fn = Vector3.Normalize(Vector3.Cross(p1 - p0, p2 - p0));
-
-                verts.Add(MakeVertex(p0, fn));
-                verts.Add(MakeVertex(p2, fn));
-                verts.Add(MakeVertex(p1, fn));
-            }
-
-            if (verts.Count == 0)
-                throw new InvalidDataException($"No faces in {path}");
-
-            // Average normals for shared positions
-            var smoothed = SmoothNormals(verts);
-
-            return (smoothed, smoothed.Length / 3);
-        }
-
-        private static Vertex[] SmoothNormals(System.Collections.Generic.List<Vertex> verts)
-        {
-            var result = new Vertex[verts.Count];
-            for (int i = 0; i < verts.Count; i++)
-            {
-                var p = verts[i].Position;
-                var avgN = Vector3.Zero;
-                int count = 0;
-                for (int j = 0; j < verts.Count; j++)
-                {
-                    if (Vector3.DistanceSquared(p, verts[j].Position) < 0.0001f)
-                    {
-                        avgN += verts[j].Normal;
-                        count++;
-                    }
-                }
-                avgN = count > 0 ? Vector3.Normalize(avgN / count) : verts[i].Normal;
-                result[i] = new Vertex(p, avgN, verts[i].TexCoord);
-            }
-            return result;
-        }
-
-        private static Vertex MakeVertex(Vector3 p, Vector3 n)
-        {
-            float u = 0.5f + MathF.Atan2(p.Z, p.X) / (2f * MathF.PI);
-            float v = 0.5f - MathF.Asin(Math.Clamp(p.Y, -1f, 1f)) / MathF.PI;
-            return new Vertex(p, n, new Vector2(u, v));
         }
     }
 
