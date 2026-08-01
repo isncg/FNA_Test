@@ -20,6 +20,7 @@
   "parameters": [
     { "name": "Projection",           "type": "MATRIX", "register": 0 },
     { "name": "SSAOParams",           "type": "FLOAT4", "register": 4 },
-    { "name": "SSAOResolutionScale",  "type": "FLOAT2", "register": 5 }
+    { "name": "SSAOResolutionScale",  "type": "FLOAT2", "register": 5 },
+    { "name": "View",                 "type": "MATRIX", "register": 6 }
   ]
 }

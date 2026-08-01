@@ -16,6 +16,7 @@ SamplerState GBuffer2Sampler : register(s1);
 float4x4 Projection        : register(c0);
 float4   SSAOParams        : register(c4); // x=radius, y=bias, z=intensity
 float2   SSAOResolutionScale : register(c5); // x=1/scaleW, y=1/scaleH for half-res
+float4x4 View              : register(c6); // world -> view, for the normal
 
 #define SSAO_RADIUS    SSAOParams.x
 #define SSAO_BIAS      SSAOParams.y
@@ -81,13 +82,16 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
     viewPos.y = ndc.y * viewZ / Projection._22;
     viewPos.z = viewZ;
 
-    // Convert world normal to view space for SSAO
-    // (approximation: view-space Z is camera forward, which aligns with world forward)
-    // For a proper solution, world→view transform should be passed as uniform.
-    // Since SSAO operates in view space, we use the normal as-is with view-space convention.
-    // The z-negation from MaterialLib is preserved for correctness against LH convention.
-    float3 N = worldN; // approximate: view-space normal ≈ world-space normal for screen-aligned
-    float NdotV = abs(N.z); // approximate: dot(N, viewForward)
+    // Bring the world normal into view space, then negate z to move from RH
+    // view space (front-facing N.z > 0) to the positive-depth convention the
+    // hemisphere sampling below assumes (front-facing N.z < 0). This mirrors
+    // MaterialLib's SSAO, whose GBuffer stores a view-space normal and negates
+    // z for exactly this reason. Skipping either step flips the sampling
+    // hemisphere into the surface on camera-facing geometry, which reads as
+    // fully occluded (black) — the teapot body showed this before the fix.
+    float3 viewN = normalize(mul(float4(worldN, 0.0), View).xyz);
+    float3 N = float3(viewN.x, viewN.y, -viewN.z);
+    float NdotV = abs(N.z); // |dot(N, viewForward)| in the positive-depth convention
 
     // Random rotation from interleaved gradient noise
     float  r   = InterleavedGradientNoise(input.Position.xy) * 6.2831853;

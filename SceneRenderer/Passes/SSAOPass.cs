@@ -64,6 +64,7 @@ public class SSAOPass : IRenderPass
         _device.SamplerStates[1] = SamplerState.PointClamp;
 
         _effect.Parameters["Projection"].SetValue(ctx.Camera.ProjectionMatrix);
+        _effect.Parameters["View"].SetValue(ctx.Camera.ViewMatrix);
         _effect.Parameters["SSAOParams"].SetValue(new Vector4(Radius, Bias, Intensity, 0));
         _effect.Parameters["SSAOResolutionScale"].SetValue(new Vector2(1.0f / _width, 1.0f / _height));
 

@@ -502,6 +502,11 @@ class Program : Game
                         $"all {geometryPixels} geometry pixels preserved.");
                 }
 
+                // Convex surfaces facing the camera must not be blacked out by
+                // SSAO (regression: hemisphere flipped when GBuffer world normals
+                // were used without a view-space transform).
+                fails += CheckSsaoBlackSpots(_renderer.LastContext!);
+
                 TestHarness.Report("SceneRenderer", fails);
                 Exit();
             }
@@ -580,6 +585,73 @@ class Program : Game
         float sinTheta = MathF.Sin(theta), cosTheta = MathF.Cos(theta);
         var n = new Vector3(sinPhi * cosTheta, cosPhi, sinPhi * sinTheta);
         return (n * r, n);
+    }
+
+    /* SSAO black-spot regression check. The teapot body is convex, so a
+     * surface patch that faces the camera can only be occluded by something
+     * in front of it — and there is nothing. If the sampling hemisphere is
+     * flipped (normal not correctly brought into the depth convention the
+     * shader works in), the samples land inside the mesh and those patches
+     * read as fully occluded. Count camera-facing geometry pixels whose AO
+     * collapsed; there should be (almost) none.
+     */
+    private int CheckSsaoBlackSpots(RenderContext ctx)
+    {
+        if (ctx.GBufferRT1 == null || ctx.GBufferRT2 == null || ctx.SSAOBlurRT == null)
+        {
+            Console.WriteLine("FAIL [ssao-blackspot]: GBuffer/SSAO targets unavailable");
+            return 1;
+        }
+
+        int w = ctx.Width, h = ctx.Height;
+        var rt1 = new Microsoft.Xna.Framework.Graphics.PackedVector.HalfVector4[w * h];
+        var rt2 = new Microsoft.Xna.Framework.Graphics.PackedVector.HalfVector4[w * h];
+        var ssao = new float[w * h];
+        ctx.GBufferRT1.GetData(rt1);
+        ctx.GBufferRT2.GetData(rt2);
+        ctx.SSAOBlurRT.GetData(ssao);
+
+        // Camera-facing = world normal within ~45° of the view axis. On the
+        // default view this selects the convex front of the teapot body and
+        // excludes the floor and lid top (their normals are ~73° off-axis).
+        Vector3 toCam = -ctx.Camera.Forward;
+
+        int facing = 0, dark = 0;
+        for (int i = 0; i < w * h; i += 1)
+        {
+            Vector4 n4 = rt1[i].ToVector4();
+            var worldN = new Vector3(n4.X * 2f - 1f, n4.Y * 2f - 1f, n4.Z * 2f - 1f);
+            if (worldN.LengthSquared() < 0.5f) continue; // unwritten/degenerate
+            worldN = Vector3.Normalize(worldN);
+
+            float viewZ = rt2[i].ToVector4().Y;
+            if (viewZ <= 0.1f || viewZ >= 100f) continue; // sky / far plane
+
+            if (Vector3.Dot(worldN, toCam) < 0.7f) continue; // not camera-facing
+
+            facing += 1;
+            if (ssao[i] < 0.5f) dark += 1;
+        }
+
+        if (facing == 0)
+        {
+            Console.WriteLine("FAIL [ssao-blackspot]: no camera-facing geometry pixels found");
+            return 1;
+        }
+
+        float darkRatio = (float)dark / facing;
+        Console.WriteLine(
+            $"[SceneRenderer] SSAO blackspot: {dark}/{facing} camera-facing " +
+            $"geometry pixels are dark ({darkRatio:P1})");
+
+        if (darkRatio > 0.02f)
+        {
+            Console.WriteLine(
+                $"FAIL [ssao-blackspot]: {darkRatio:P1} of camera-facing convex pixels " +
+                $"are occluded — the SSAO hemisphere is sampling into the surface");
+            return 1;
+        }
+        return 0;
     }
 
     private static BoundingSphere ComputeBounds(TeapotModel.Vertex[] verts)
