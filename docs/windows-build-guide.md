@@ -287,7 +287,7 @@ where dxc
 ### 6.2 构建股票特效 FEB
 
 ```bat
-cd FNA\src\Graphics\Effect\StockEffects\HLSL_DXC
+cd FNA\src\Graphics\Effect\StockEffects\FEB
 
 for %f in (BasicEffect AlphaTestEffect DualTextureEffect SkinnedEffect SpriteEffect EnvironmentMapEffect) do (
     python ..\..\..\..\..\tools\feb_builder.py %f.feb.json
@@ -907,7 +907,7 @@ run_tests.bat --skip-fna3d --skip-feb --skip-fna --headless
 | FNA3D DLL 输出 | `FNA\lib\FNA3D\build\FNA3D.dll` |
 | FNA 源码 | `FNA\src\` |
 | FNA DLL 输出 | `FNA\bin\Debug\net10.0\FNA.dll` |
-| 股票特效 HLSL | `FNA\src\Graphics\Effect\StockEffects\HLSL_DXC\` |
+| 股票特效 HLSL | `FNA\src\Graphics\Effect\StockEffects\FEB\` |
 | FEB 构建工具 | `FNA\tools\feb_builder.py` |
 | 测试项目 | `FNA_Test\StockEffect\` `FNA_Test\ComputeShaderEffect\` 等 |
 | DllMap 配置 | `FNA\app.config`（运行时 `FNA.dll.config`） |

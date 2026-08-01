@@ -70,7 +70,7 @@ XNA 原版 BasicEffect 以 **32 个着色器排列**应对不同输入布局与�
 
 ## 3. 各 Effect 的 technique 矩阵与 HLSL 修改
 
-实施位置：`FNA/src/Graphics/Effect/StockEffects/HLSL_DXC/`。同一 effect 的所有 VS 变体写在**同一 HLSL 文件的多个 entry point** 中（共享 cbuffer/寄存器布局与 VS_OUTPUT 结构，PS 不变、共用）。feb_builder 的 manifest 已支持 per-pass `entry` 字段与多 technique（`techniques[]` 数组 → FEB 的 passStart/passCount），**FEB 格式与 feb_builder 零改动**。
+实施位置：`FNA/src/Graphics/Effect/StockEffects/FEB/`。同一 effect 的所有 VS 变体写在**同一 HLSL 文件的多个 entry point** 中（共享 cbuffer/寄存器布局与 VS_OUTPUT 结构，PS 不变、共用）。feb_builder 的 manifest 已支持 per-pass `entry` 字段与多 technique（`techniques[]` 数组 → FEB 的 passStart/passCount），**FEB 格式与 feb_builder 零改动**。
 
 ### 3.1 BasicEffect（4 techniques）
 

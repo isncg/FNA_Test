@@ -227,4 +227,4 @@ if (CurrentTechnique != target)
 | Fog 无效果 | FogColor 默认黑色（不可见） | 设 `FogColor = Color.Red.ToVector3()`，缩小雾距 |
 | 环境反射全黑 | `EnvironmentMapSpecular=(0,0,0)` 且 `FresnelFactor=1.0` | 调低 FresnelFactor 或开 Spec |
 | 改参数无反应 | PS 寄存器与 FEB manifest 不一致 | 对比 grep 输出 |
-| 修改 shader 不生效 | 没重建 FEB 或没复制到 FXB/ | 检查 `ls -la HLSL_DXC/*.feb FXB/*.fxb` 时间戳 |
+| 修改 shader 不生效 | 没重建 FEB 或没复制到 FXB/ | 检查 `ls -la FEB/*.feb FXB/*.fxb` 时间戳 |

@@ -2,13 +2,12 @@
 # run_tests.sh — Build and run all FNA_Test projects in headless mode.
 # Usage: ./run_tests.sh
 # For CI/headless environments: VK_LAYER_KHRONOS_validation=1 ./run_tests.sh
-set -e
+# NOTE: no `set -e` — test failures are handled explicitly via return codes.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FNA_DIR="$SCRIPT_DIR/../FNA"
 FEB_BUILDER="$SCRIPT_DIR/../FNA/tools/feb_builder.py"
-FEB_SRC="$FNA_DIR/src/Graphics/Effect/StockEffects/HLSL_DXC"
-FEB_DST="$FNA_DIR/src/Graphics/Effect/StockEffects/FXB"
+FEB_SRC="$FNA_DIR/src/Graphics/Effect/StockEffects/FEB"
 FNA3D_BUILD="$FNA_DIR/lib/FNA3D/build"
 
 # ─── Step 1: Rebuild FNA3D (submodule) ──────────────────────────────────────
@@ -22,12 +21,6 @@ for manifest in BasicEffect AlphaTestEffect DualTextureEffect SkinnedEffect Spri
     echo -n "  ${manifest}... "
     python3 "$FEB_BUILDER" "${manifest}.feb.json" 2>&1 | head -1
 done
-# Copy to FXB/
-for f in *.feb; do
-    base="${f%.feb}"
-    cp "$f" "$FEB_DST/${base}.fxb"
-done
-echo "  Copied to FXB/"
 
 # ─── Step 3: Build FNA ──────────────────────────────────────────────
 echo "=== Building FNA ==="
@@ -90,51 +83,94 @@ cd "$SCRIPT_DIR"
 PASS=0
 FAIL=0
 FAILED_TESTS=""
+VALIDATION_FAILS=""
+
+# Known validation failures (technical debt registry — remove entries as fixed)
+KNOWN_VALIDATION_FAILURES=(
+    "StockEffect/BasicEffect"   # VUID-07904, see REQ-effect-hlsl-vertex-convention.md
+)
+
+in_known_failures() {
+    local name="$1"
+    for entry in "${KNOWN_VALIDATION_FAILURES[@]}"; do
+        [ "$entry" = "$name" ] && return 0
+    done
+    return 1
+}
+
+# Two-level log verdict: PASS / PASS(warn) / FAIL(validation) / FAIL
+# Usage: check_test_log <logfile> <display-name>
+# Returns: 0=pass, 1=fail, 2=fail(validation)
+check_test_log() {
+    local log="$1" name="$2"
+    if ! grep -q "RESULT:.*PASS" "$log"; then
+        return 1
+    fi
+    if grep -qE "VUID-|Validation Error|Assertion failure at SDL_GPU" "$log"; then
+        if in_known_failures "$name"; then
+            echo "  => PASS(warn)"
+            return 0
+        fi
+        echo "  => FAIL(validation):"
+        grep -E "VUID-|Validation Error" "$log" | head -1 | sed 's/^/     /'
+        return 2
+    fi
+    echo "  => PASS"
+    return 0
+}
 
 test_proj() {
     local cat="$1" proj="$2"
     local path="$cat/$proj/$proj.csproj"
     local outdir="$cat/$proj/bin/Debug/net10.0"
+    local dispname="$cat/$proj"
 
-    echo "=== $cat/$proj ==="
+    echo "=== $dispname ==="
     dotnet build "$path" --nologo -clp:NoSummary 2>&1 | tail -1
     ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$outdir/libFNA3D.so"
     ln -sf "$FNA3D_BUILD/libFNA3D.so.27.0.0" "$outdir/libFNA3D.so.0"
 
-    if dotnet run --no-build --project "$path" -- --headless 2>&1 | grep -q "RESULT:.*PASS"; then
-        echo "  => PASS"
-        return 0
-    else
-        echo "  => FAIL"
-        return 1
-    fi
+    local log; log=$(mktemp)
+    dotnet run --no-build --project "$path" -- --headless > "$log" 2>&1
+    check_test_log "$log" "$dispname"
+    local rc=$?
+    rm -f "$log"
+    return $rc
 }
 
 for proj in SpriteEffect BasicEffect AlphaTestEffect DualTextureEffect EnvironmentMapEffect BasicEffectMatrix SkinnedEffect; do
-    if test_proj "StockEffect" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS StockEffect/$proj"; fi
+    test_proj "StockEffect" "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS StockEffect/$proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS StockEffect/$proj"; fi
 done
 for proj in ParticleFire; do
-    if test_proj "ComputeShaderEffect" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS ComputeShaderEffect/$proj"; fi
+    test_proj "ComputeShaderEffect" "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS ComputeShaderEffect/$proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS ComputeShaderEffect/$proj"; fi
 done
 for proj in AsteroidField; do
-    if test_proj "StorageBuffer" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS StorageBuffer/$proj"; fi
+    test_proj "StorageBuffer" "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS StorageBuffer/$proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS StorageBuffer/$proj"; fi
 done
 for proj in TrailEffect TrailEffectCapture; do
-    if test_proj "GPUInstancing" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS GPUInstancing/$proj"; fi
+    test_proj "GPUInstancing" "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS GPUInstancing/$proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS GPUInstancing/$proj"; fi
 done
 for proj in JFAOutline SDFFontTest DepthSampling DepthTexture SharedDepth; do
-    if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
+    test_proj "." "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS $proj"; fi
 done
 for proj in ComputeDispatch; do
-    if test_proj "." "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; fi
+    test_proj "." "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS $proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS $proj"; fi
 done
 
 # SceneRenderer (deferred PBR pipeline)
-if test_proj "." "SceneRenderer"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS SceneRenderer"; fi
+test_proj "." "SceneRenderer"; rc=$?
+if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS SceneRenderer"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS SceneRenderer"; fi
 
 # RTS tests (FNA_RTS Phase 1)
 for proj in Camera2D PrimitiveLines IsometricTiles ScreenToWorld DepthSorting RectSelection; do
-    if test_proj "RTS" "$proj"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS RTS/$proj"; fi
+    test_proj "RTS" "$proj"; rc=$?
+    if [ $rc -eq 0 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED_TESTS="$FAILED_TESTS RTS/$proj"; [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS RTS/$proj"; fi
 done
 
 # GUI panel tests (all 38, G01–G38)
@@ -147,12 +183,17 @@ GUI_PASS=0
 GUI_FAIL=0
 for t in $(seq -w 1 38); do
     test_name="G$t"
-    if dotnet run --no-build --project "GuiDemo/Panel/Panel.csproj" -- --headless --test "$test_name" 2>&1 | grep -q "RESULT:.*PASS"; then
+    gui_log=$(mktemp)
+    dotnet run --no-build --project "GuiDemo/Panel/Panel.csproj" -- --headless --test "$test_name" > "$gui_log" 2>&1
+    check_test_log "$gui_log" "GuiDemo/Panel/$test_name"
+    rc=$?
+    rm -f "$gui_log"
+    if [ $rc -eq 0 ]; then
         GUI_PASS=$((GUI_PASS + 1))
     else
         GUI_FAIL=$((GUI_FAIL + 1))
         FAILED_TESTS="$FAILED_TESTS GuiDemo/Panel/$test_name"
-        echo "  $test_name => FAIL"
+        [ $rc -eq 2 ] && VALIDATION_FAILS="$VALIDATION_FAILS GuiDemo/Panel/$test_name"
     fi
 done
 echo "  GuiDemo/Panel: $GUI_PASS passed, $GUI_FAIL failed"
@@ -165,6 +206,9 @@ echo "========================================"
 echo "  Results: $PASS passed, $FAIL failed"
 if [ -n "$FAILED_TESTS" ]; then
     echo "  Failed:$FAILED_TESTS"
+fi
+if [ -n "$VALIDATION_FAILS" ]; then
+    echo "  Validation failures:$VALIDATION_FAILS"
 fi
 echo "========================================"
 

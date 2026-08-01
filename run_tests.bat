@@ -12,7 +12,7 @@ REM ─── Defaults ───────────────────
 set SKIP_FNA3D=0
 set SKIP_FEB=0
 set SKIP_FNA=0
-set HEADLESS_ONLY=0
+set HEADLESS_ONLY=1
 
 REM ─── Parse arguments ───────────────────────────────────────────────
 :parse_args
@@ -21,6 +21,7 @@ if /i "%~1"=="--skip-fna3d"   set SKIP_FNA3D=1
 if /i "%~1"=="--skip-feb"     set SKIP_FEB=1
 if /i "%~1"=="--skip-fna"     set SKIP_FNA=1
 if /i "%~1"=="--headless"     set HEADLESS_ONLY=1
+if /i "%~1"=="--interactive" set HEADLESS_ONLY=0
 if /i "%~1"=="--help"         goto :usage
 shift
 goto :parse_args
@@ -32,7 +33,8 @@ echo Options:
 echo   --skip-fna3d    Skip FNA3D (C library) build
 echo   --skip-feb      Skip FEB shader asset build
 echo   --skip-fna      Skip FNA (C# library) build
-echo   --headless      Only run tests in headless mode (no window)
+echo   --headless      Run tests in headless mode (default)
+echo   --interactive   Run tests with visible window (no auto-exit)
 echo   --help          Show this help message
 echo.
 echo SDL3 path: (default C:\SDL3, set SDL3_DIR to override)
@@ -44,8 +46,7 @@ REM ─── Paths ────────────────────
 set SCRIPT_DIR=%~dp0
 set FNA_DIR=%SCRIPT_DIR%..\FNA
 set FEB_BUILDER=%FNA_DIR%\tools\feb_builder.py
-set FEB_SRC=%FNA_DIR%\src\Graphics\Effect\StockEffects\HLSL_DXC
-set FEB_DST=%FNA_DIR%\src\Graphics\Effect\StockEffects\FXB
+set FEB_SRC=%FNA_DIR%\src\Graphics\Effect\StockEffects\FEB
 set FNA3D_BUILD=%FNA_DIR%\lib\FNA3D\build
 
 REM Python command (prefer %PYTHON%, then python.exe, then py launcher)
@@ -66,8 +67,8 @@ if not "%PYTHON%"=="" (
     )
 )
 
-REM SDL3 path (default C:\SDL3, override via environment variable)
-if "%SDL3_DIR%"=="" set SDL3_DIR=C:\SDL3
+REM SDL3 path (default ..\FNA\lib\SDL-release-3.4.x, override via environment variable)
+if "%SDL3_DIR%"=="" set SDL3_DIR=..\FNA\lib\SDL-release-3.4.x
 
 REM Try the official prebuilt VC-x64 layout first
 set SDL3_INC=%SDL3_DIR%\include
@@ -95,6 +96,11 @@ REM ─── Summary ───────────────────�
 set PASS=0
 set FAIL=0
 set FAILED_TESTS=
+set VALIDATION_FAILS=
+
+REM Known validation failures (technical debt registry - remove entries as fixed)
+REM VUID-07904: see REQ-effect-hlsl-vertex-convention.md
+set KNOWN_VALIDATION_FAILURES=StockEffect/BasicEffect
 
 echo ============================================
 echo   FNA_Test Windows Test Runner
@@ -188,12 +194,6 @@ for %%e in (BasicEffect AlphaTestEffect DualTextureEffect SkinnedEffect SpriteEf
     )
 )
 
-REM Copy to FXB directory
-if not exist "%FEB_DST%" mkdir "%FEB_DST%"
-for %%f in (*.feb) do (
-    copy /y "%%f" "%FEB_DST%\%%~nf.fxb" >nul
-)
-echo   Copied .feb -^> .fxb to FXB/
 popd
 
 :step2_done
@@ -301,8 +301,8 @@ if exist "%SCRIPT_DIR%tools\sdf_font_builder.py" (
         echo   [INFO] SDF font atlas not found.
         echo          On Windows, SDF font atlases must be generated manually
         echo          or copied from a Linux build.
-        echo          Required fonts: LiberationSans-Regular.ttf (en),
-        echo          NotoSansCJK-Regular.ttc (cn).
+        echo          Required fonts: LiberationSans-Regular.ttf ^(en^),
+        echo          NotoSansCJK-Regular.ttc ^(cn^).
         echo          See docs/windows-build-guide.md for details.
     )
 )
@@ -355,23 +355,49 @@ if exist "%SDL3_DLL%" (
     xcopy /d /y /q "%SDL3_DLL%" "!OUTDIR!\" >nul 2>&1
 )
 
-REM Run (single invocation, pipe to findstr)
-REM NOTE: Use `dotnet <dll>` directly instead of `dotnet run`. `dotnet run`
-REM launches the app in a way that fails to resolve native SDL3.dll/FNA3D.dll
-REM from the output dir (DllNotFoundException), while `dotnet <dll>` resolves
-REM them correctly from the app base directory.
+REM Run and capture output to temp file for two-level verdict
 if "%HEADLESS_ONLY%"=="1" set EXTRA=--headless
-dotnet "%OUTDIR%\%PROJ%.dll" %EXTRA% 2>&1 | findstr "RESULT:.*PASS" >nul
-if !ERRORLEVEL! equ 0 (
-    echo   =^> PASS
-    set /a PASS+=1
-    exit /b 0
-) else (
+set LOGFILE=%TEMP%\fna_test_run.log
+dotnet "!OUTDIR!\%PROJ%.dll" %EXTRA% > "!LOGFILE!" 2>&1
+
+REM Level 1: check for RESULT:PASS
+findstr /R "RESULT:.*PASS" "!LOGFILE!" >nul 2>&1
+if !ERRORLEVEL! neq 0 (
     echo   =^> FAIL
     set /a FAIL+=1
     if "!FAILED_TESTS!"=="" (set FAILED_TESTS=!DISPNAME!) else (set FAILED_TESTS=!FAILED_TESTS! !DISPNAME!)
+    del "!LOGFILE!" >nul 2>&1
     exit /b 1
 )
+
+REM Level 2: check for validation layer errors
+findstr /R "VUID- Validation.Error Assertion.failure" "!LOGFILE!" >nul 2>&1
+if !ERRORLEVEL! equ 0 (
+    REM Check known failures exemption list
+    echo %KNOWN_VALIDATION_FAILURES% | findstr /C:"!DISPNAME!" >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        echo   =^> PASS^(warn^)
+        set /a PASS+=1
+        del "!LOGFILE!" >nul 2>&1
+        exit /b 0
+    )
+    echo   =^> FAIL^(validation^):
+    for /f "tokens=*" %%v in ('findstr /R "VUID- Validation.Error" "!LOGFILE!"') do (
+        echo      %%v
+        goto :validation_msg_done
+    )
+    :validation_msg_done
+    set /a FAIL+=1
+    if "!FAILED_TESTS!"=="" (set FAILED_TESTS=!DISPNAME!) else (set FAILED_TESTS=!FAILED_TESTS! !DISPNAME!)
+    if "!VALIDATION_FAILS!"=="" (set VALIDATION_FAILS=!DISPNAME!) else (set VALIDATION_FAILS=!VALIDATION_FAILS! !DISPNAME!)
+    del "!LOGFILE!" >nul 2>&1
+    exit /b 2
+)
+
+echo   =^> PASS
+set /a PASS+=1
+del "!LOGFILE!" >nul 2>&1
+exit /b 0
 
 :run_tests_start
 
@@ -428,20 +454,32 @@ if exist "%SDL3_DLL%" (
 
 set GUI_PASS=0
 set GUI_FAIL=0
+set LOGFILE=%TEMP%\fna_test_gui.log
 for /L %%i in (1,1,38) do (
     set NUM=0%%i
     set NUM=!NUM:~-2!
     set TEST_NAME=G!NUM!
 
-    dotnet "%PANEL_OUTDIR%\Panel.dll" --headless --test !TEST_NAME! 2>&1 | findstr "RESULT:.*PASS" >nul
-    if !ERRORLEVEL! equ 0 (
-        set /a GUI_PASS+=1
-    ) else (
+    dotnet "%PANEL_OUTDIR%\Panel.dll" --headless --test !TEST_NAME! > "!LOGFILE!" 2>&1
+
+    findstr /R "RESULT:.*PASS" "!LOGFILE!" >nul 2>&1
+    if !ERRORLEVEL! neq 0 (
         set /a GUI_FAIL+=1
         set FAILED_TESTS=!FAILED_TESTS! GuiDemo/Panel/!TEST_NAME!
         echo   !TEST_NAME! =^> FAIL
+    ) else (
+        findstr /R "VUID- Validation.Error Assertion.failure" "!LOGFILE!" >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            set /a GUI_FAIL+=1
+            set FAILED_TESTS=!FAILED_TESTS! GuiDemo/Panel/!TEST_NAME!
+            set VALIDATION_FAILS=!VALIDATION_FAILS! GuiDemo/Panel/!TEST_NAME!
+            echo   !TEST_NAME! =^> FAIL^(validation^)
+        ) else (
+            set /a GUI_PASS+=1
+        )
     )
 )
+del "!LOGFILE!" >nul 2>&1
 echo   GuiDemo/Panel: !GUI_PASS! passed, !GUI_FAIL! failed
 set /a PASS+=%GUI_PASS%
 set /a FAIL+=%GUI_FAIL%
@@ -456,6 +494,9 @@ echo ============================================
 echo   Results: %PASS% passed, %FAIL% failed
 if not "%FAILED_TESTS%"=="" (
     echo   Failed:%FAILED_TESTS%
+)
+if not "%VALIDATION_FAILS%"=="" (
+    echo   Validation failures:%VALIDATION_FAILS%
 )
 echo ============================================
 
