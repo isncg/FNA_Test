@@ -93,21 +93,55 @@ depth and called `discard`, blending additively.
 - **Shadows**: Single directional shadow map, 2048x2048 R32F, 3x3 PCF
 - **Tonemap**: ACES filmic (Narkowitz fit) + gamma 2.2
 
+## Texture Colour Space and Mips
+
+`Texture2D.FromStream` always produces a single-level `SurfaceFormat.Color`
+(linear UNORM) texture, which broke the pipeline in two ways until 2026-07-31:
+sRGB-encoded albedo was consumed as if it were linear, and nothing had mips for
+the anisotropic sampler to minify with. `Core/TextureLoader.cs` now handles this,
+mirroring Unreal's per-texture sRGB flag:
+
+| Map | Format | Rationale |
+|-----|--------|-----------|
+| albedo | `ColorSrgbEXT` | sRGB-encoded colour; the texture unit decodes to linear on sample, before filtering |
+| normal | `Color` (linear) | tangent-space vectors, not colour |
+| packed (ARM) | `Color` (linear) | scalar AO/Roughness/Metallic data |
+
+The error being fixed was strongly non-uniform, which is why it read as "detail
+looks wrong" rather than "too bright": treating an sRGB texel as linear
+over-brightens texel 32 by **8.7x** and texel 128 by **2.3x**, while texel 255 is
+exact — the texture's tonal range gets crushed.
+
+Mips are built on the CPU (no GPU mip generation is exposed: `SDL_GenerateMipmaps`
+needs `COLOR_TARGET` usage, which FNA3D only sets for render targets).
+Downsampling happens in the space that suits the data — linear light for sRGB
+colour, renormalised vectors for normal maps, plain averages for masks — since
+box-filtering sRGB-encoded values directly would darken each level. Cost is
+~2.3 s for 24 2048² textures (12 levels each), mostly JPEG decode.
+
 ## Known Issues
 
-- **Material detail fidelity**: surface detail does not look right yet (observed
-  2026-07-31 in the interactive view, after the shared-depth refactor and the
-  material-binding fix landed). Not root-caused yet; the investigation should
-  start from the observed artefacts rather than from these notes. What is known
-  about the current implementation:
-  - The vertex format is PNT (`Position`, `Normal`, `TexCoord`) — **no tangents**.
-    `GBuffer_ps` therefore builds a tangent frame from the world normal alone
-    (`T = normalize(cross(up, N))`), so the normal map's tangent space is not
-    tied to the UV layout. Detail can be rotated or mirrored per surface, and it
-    degenerates where `N` is parallel to `up`.
-  - `ORMMap` is sampled as `R=AO, G=Roughness, B=Metallic`; worth confirming
-    against how the Poly Haven `_packed` textures actually store those channels.
+- **Material source format**: the maps are JPEG. Measured from the SOF markers,
+  every `*_packed.jpg` and some `*_normal.jpg` use 2x2 chroma subsampling, so
+  roughness (G), metallic (B) and the normal's Y/Z are effectively half
+  resolution, plus DCT block artefacts on data that is not colour. Unreal uses
+  BC5 for normals and BC4/BC7 for masks: block compressed, but per-channel and
+  without chroma subsampling. Fixing this means re-fetching the textures in a
+  lossless format and compressing properly.
+- **Tangent frame is not UV-aligned**: the vertex format is PNT (`Position`,
+  `Normal`, `TexCoord`) with **no tangents**, so `GBuffer_ps` fabricates one from
+  the world normal (`T = normalize(cross(up, N))`). Normal-map detail is
+  therefore rotated arbitrarily per surface orientation and the frame flips on
+  the floor, where `N` is parallel to `up`. Unreal generates tangents at import
+  (MikkTSpace) and passes `TangentToWorld` through the vertex factory, so its
+  frame is UV-aligned by construction. Fix options: add tangents to the vertex
+  format, or derive a cotangent frame from `ddx/ddy` of position and UV in the
+  pixel shader.
+- **GBuffer albedo precision**: RT0 is `SurfaceFormat.Color`, so linear albedo is
+  stored in 8 bits, which under-serves the darks. Unreal encodes base colour
+  before storing it in the GBuffer for this reason. A cheap fix is to store
+  `sqrt(albedo)` and square it in the lighting pass.
 - **Teapot mesh attributes**: the `.tris` source has neither normals nor
   texcoords, so `TeapotModel.Load` averages face normals across *all* vertices
   (an O(n²) pass over 10464 vertices) and generates UVs by cylindrical
-  projection. That UV scheme is a plausible contributor to the item above.
+  projection. That UV scheme interacts badly with the tangent issue above.

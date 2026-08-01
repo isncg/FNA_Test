@@ -221,6 +221,7 @@ class Program : Game
             .ToArray();
 
         Console.WriteLine($"Found {_materialDirs.Length} materials in {assetsBase}");
+        var texSw = System.Diagnostics.Stopwatch.StartNew();
         _albedoMaps = new Texture2D[_materialDirs.Length];
         _normalMaps = new Texture2D[_materialDirs.Length];
         _ormMaps = new Texture2D[_materialDirs.Length];
@@ -229,9 +230,18 @@ class Program : Game
         {
             var dir = _materialDirs[i];
             var name = Path.GetFileName(dir);
-            _albedoMaps[i] = LoadTex(Path.Combine(dir, $"{name}_albedo.jpg")) ?? _defaultWhite;
-            _normalMaps[i] = LoadTex(Path.Combine(dir, $"{name}_normal.jpg")) ?? _defaultNormal;
-            _ormMaps[i] = LoadTex(Path.Combine(dir, $"{name}_packed.jpg")) ?? _defaultORM;
+            /* Albedo is sRGB-encoded, so it is tagged ColorSrgbEXT and the
+             * texture unit decodes it to linear on sample (the pipeline is
+             * linear until Tonemap applies gamma). Normal and packed maps carry
+             * data, not colour, and stay linear. All get mips so the
+             * anisotropic sampler has something to minify with.
+             */
+            _albedoMaps[i] = TextureLoader.Load(GraphicsDevice, Path.Combine(dir, $"{name}_albedo.jpg"),
+                TextureLoader.Kind.SrgbColor) ?? _defaultWhite;
+            _normalMaps[i] = TextureLoader.Load(GraphicsDevice, Path.Combine(dir, $"{name}_normal.jpg"),
+                TextureLoader.Kind.NormalMap) ?? _defaultNormal;
+            _ormMaps[i] = TextureLoader.Load(GraphicsDevice, Path.Combine(dir, $"{name}_packed.jpg"),
+                TextureLoader.Kind.LinearData) ?? _defaultORM;
             Console.WriteLine($"  [{i}] {name}");
 
             _scene.MaterialPalette.Add(new Material
@@ -242,6 +252,9 @@ class Program : Game
                 ORMMap = _ormMaps[i],
             });
         }
+        texSw.Stop();
+        Console.WriteLine($"  Textures decoded + mipped in {texSw.ElapsedMilliseconds} ms " +
+            $"(albedo sRGB, normal/packed linear, mips on)");
 
         // Assign default materials
         _floorMat = 5; // marble
