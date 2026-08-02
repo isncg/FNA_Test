@@ -10,11 +10,19 @@
 //   1. Reconstruct view-space position from depth + inverse projection
 //   2. Compute view-space reflection direction R = reflect(V, N)
 //   3. Linear ray march along R in view space
-//   4. At each step, project to screen UV, compare depth
-//   5. On hit: reproject the hit into the previous frame and sample the lit
-//      history (UE5-style), apply Fresnel fade + roughness blur
-//   6. On miss: return transparent (fallback to IBL in lighting pass)
-//   7. Edge fade to avoid pop at screen borders
+//   4. At each step, project to screen UV, compare signed depth difference
+//   5. Detect surface crossing (sign change of depthDiff), then binary-search
+//      refinement (5 iters) for a precise intersection — catches the first
+//      surface the ray crosses regardless of its camera-facing thickness
+//   6. Reproject the refined hit into the previous frame and sample the lit
+//      history (UE5-style), apply roughness blur (cone-tracing approx)
+//   7. On miss: return coverage 0 (fallback to IBL in lighting pass)
+//
+// Output (premultiplied, UE ReflectionApplyPS convention):
+//   rgb = reflectedColor * coverage, a = coverage, where coverage is the
+//   UE-style roughness mask saturate(roughness * RoughnessMaskMul + 2).
+//   The lighting pass composites SSR.rgb + EnvSpecular * (1 - a), so the SSR
+//   coverage occludes the environment specular along the reflection direction.
 
 Texture2D    GBufferRT0      : register(t0);
 SamplerState GBuffer0Sampler : register(s0);
@@ -28,14 +36,14 @@ SamplerState HistorySampler  : register(s3);
 float4x4 ViewProj       : register(c0);
 float4x4 InvViewProj    : register(c4);
 float3   EyePosition    : register(c8);
-float4   SSRParams      : register(c11); // x=maxSteps, y=stepSize, z=maxRoughness, w=fadeDistance
+float4   SSRParams      : register(c11); // x=maxSteps, y=stepSize, z=maxRoughness, w=roughnessMaskMul
 float4x4 Projection     : register(c12);
 float4x4 PrevViewProj   : register(c16); // reproject hits into the previous frame
 
 #define SSR_MAX_STEPS      int(SSRParams.x)
 #define SSR_STEP_SIZE      SSRParams.y
 #define SSR_MAX_ROUGHNESS  SSRParams.z
-#define SSR_FADE_DISTANCE  SSRParams.w
+#define SSR_ROUGHNESS_MASK_MUL  SSRParams.w
 
 struct PS_INPUT
 {
@@ -108,8 +116,23 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
     // Jitter start position to avoid self-intersection
     rayPos += rayStep * 0.5;
 
+    // Crossing-based hit detection: track the signed depth difference between
+    // the ray and the scene surface.  A sign change (prevDiff <= 0 -> diff > 0)
+    // means the ray crossed a surface between consecutive steps.  This replaces
+    // the old thickness-window test (depthDiff in (0, 0.5)) which compared the
+    // ray against the camera-facing GBuffer depth: for objects reflected from
+    // below (teapot in a floor), the ray approaches the UNDERSIDE while the
+    // GBuffer stores the TOP surface.  The thickness window rejected the true
+    // underside crossing (depthDiff ~ object height > 0.5) and only registered
+    // a hit near the top — shifting each object's reflection by its own height
+    // and producing depth-dependent "layering" that worsened for parts closer
+    // to the floor.  Crossing detection catches the first intersection (the
+    // underside) correctly regardless of object thickness.
+    float prevDiff = -1.0; // assume the jittered start is in front of surfaces
+
     for (int i = 0; i < steps; i++)
     {
+        float3 prevPos = rayPos;
         rayPos += rayStep;
 
         // Project view-space position to screen UV
@@ -130,13 +153,60 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
         // Sample depth at projected position
         float sampleDepth = GBufferRT2.Sample(GBuffer2Sampler, sampleUV).g;
 
-        // Hit check
-        float depthDiff = rayPos.z - sampleDepth;
-        if (depthDiff > 0.0 && depthDiff < 0.5)
+        // Skip sky / uninitialized depth
+        if (sampleDepth <= 0.0 || sampleDepth >= 1000.0)
         {
-            // Fresnel fading based on step distance
-            float fade = 1.0 - (float(i) / float(steps));
-            fade = smoothstep(0.0, 1.0, fade);
+            prevDiff = -1.0;
+            continue;
+        }
+
+        float depthDiff = rayPos.z - sampleDepth;
+
+        // Crossing: previous step was in front (or at) the surface, this step
+        // is behind.  The small epsilon rejects grazing self-intersections.
+        if (prevDiff <= 0.0 && depthDiff > 0.001)
+        {
+            // ── Binary search refinement ──────────────────────────────────
+            // Narrow the crossing between prevPos (in front) and rayPos
+            // (behind).  5 iterations reduce the step-size uncertainty to
+            // ~3%, giving a precise intersection for history reprojection.
+            float3 hi = rayPos;   // behind surface
+            float3 lo = prevPos;  // in front of surface
+            [unroll]
+            for (int r = 0; r < 5; r++)
+            {
+                float3 mid = (lo + hi) * 0.5;
+                float4 mp;
+                mp.x = mid.x * Projection._11;
+                mp.y = mid.y * Projection._22;
+                mp.z = mid.z * Projection._33 + Projection._43;
+                mp.w = mid.z;
+                float2 midUV = float2(
+                    (mp.x / mp.w) * 0.5 + 0.5,
+                    (1.0 - mp.y / mp.w) * 0.5);
+                float midDepth = GBufferRT2.Sample(GBuffer2Sampler, midUV).g;
+                if (mid.z > midDepth)
+                    hi = mid;
+                else
+                    lo = mid;
+            }
+            rayPos = hi;  // precise intersection point
+            // Coverage = occlusion mask for the environment specular (UE-style).
+            // A confirmed hit is a reliable occluder of the infinitely-far
+            // environment. UE shapes the confidence with a roughness mask
+            // (ScreenSpaceReflections.usf, GetRoughnessFade):
+            //     fade = saturate(roughness * RoughnessMaskMul + 2)
+            // which (with the default negative mask) holds full confidence for
+            // smooth and medium lobes and only fades the rough ones — the rough
+            // lobe blur is left to the 3x3 history cone-trace above, not to the
+            // confidence. This replaces the earlier linear (1 - roughness), which
+            // attenuated medium-roughness reflections too aggressively. No
+            // distance fade and no screen-edge fade weight the coverage — those
+            // collapsed it for the near-floor teapot reflection (which projects to
+            // the bottom border), leaking the HDRI window on top of the
+            // reflection. Off-screen rays are handled by the march bounds check
+            // above (no hit -> coverage 0 -> environment fallback), as in UE.
+            float coverage = saturate(roughness * SSR_ROUGHNESS_MASK_MUL + 2.0);
 
             // UE5-style temporal reflection: sample the previous frame's lit
             // HDR scene (direct light + IBL + sky already included) instead of
@@ -177,15 +247,15 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
                 hitColor /= 9.0;
             }
 
-            reflectionColor = float4(hitColor * fade, fade);
+            // Premultiplied output: rgb = reflectedColor * coverage, a = coverage.
+            // The lighting pass composites with the "over" operator
+            // (SSR.rgb + Env * (1 - a)), matching UE's ReflectionApplyPS.
+            reflectionColor = float4(hitColor * coverage, coverage);
             break;
         }
-    }
 
-    // Edge fade: reduce reflection near screen borders
-    float edgeFadeX = smoothstep(0.0, 0.15, uv.x) * smoothstep(1.0, 0.85, uv.x);
-    float edgeFadeY = smoothstep(0.0, 0.15, uv.y) * smoothstep(1.0, 0.85, uv.y);
-    reflectionColor.rgb *= edgeFadeX * edgeFadeY;
+        prevDiff = depthDiff;
+    }
 
     return reflectionColor;
 }

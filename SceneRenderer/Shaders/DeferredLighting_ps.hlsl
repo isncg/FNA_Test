@@ -100,6 +100,20 @@ float2 EnvBRDFApprox(float NdotV, float roughness)
     return float2(max(a004, 0.0), max(b004, 0.0));
 }
 
+// Off-specular peak reflection direction (UE ReflectionEnvironmentShared.usf,
+// GetOffSpecularPeakReflectionDir). For a rough surface the dominant direction of
+// the GGX importance-sampled lobe is not the mirror reflection but is shifted
+// toward the normal; this blends R toward N by a roughness-dependent weight
+// (a = roughness^2, weight = (1-a)(sqrt(1-a)+a): 1 at roughness 0 -> pure mirror,
+// 0 at roughness 1 -> pure normal). Normalized because our equirectangular lookup
+// (DirToEquirect) needs a unit direction for the elevation term, unlike UE's
+// cubemap sampling which is direction-only.
+float3 GetOffSpecularPeakReflectionDir(float3 normal, float3 reflectionVector, float roughness)
+{
+    float a = roughness * roughness;
+    return normalize(lerp(normal, reflectionVector, (1.0 - a) * (sqrt(1.0 - a) + a)));
+}
+
 // ── IBL ─────────────────────────────────────────────────────────────────────
 
 float2 DirToEquirect(float3 dir)
@@ -231,6 +245,12 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
     float ssao = SSAOBlurRT.Sample(SSAOSampler, uv).r;
     float ao  = bakedAO * ssao;
 
+    // UE-style specular occlusion (ReflectionEnvironmentShaders.usf, ReflectionApplyPS):
+    // tightens the indirect-specular Fresnel term in creases and at grazing
+    // angles, so occluded / edge-on surfaces reflect less instead of staying
+    // bright. saturate((NoV + AO)^2 - 1 + AO).
+    float specOcclusion = saturate((NdotV + ao) * (NdotV + ao) - 1.0 + ao);
+
     // SSR reflection
     float4 ssrColor = SSRRT.Sample(SSRSampler, uv);
 
@@ -323,6 +343,10 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
 
     // ── Indirect IBL ─────────────────────────────────────────────────────────
     float3 R = reflect(-V, worldN);
+    // The environment lookup uses the off-specular peak direction (UE): a rough
+    // surface reflects dominantly slightly toward the normal. SSR keeps the mirror
+    // direction R (computed in the SSR pass), matching UE's split.
+    float3 envR = GetOffSpecularPeakReflectionDir(worldN, R, roughness);
 
     float3 F_ibl = Schlick_F(NdotV, F0);
     float3 kD = (1.0 - F_ibl) * (1.0 - metallic);
@@ -336,13 +360,20 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
     PrefilteredEnvMap.GetDimensions(0, envW, envH, mipCount);
     float  maxMip = float(mipCount - 1);
     float  mipLevel = roughness * maxMip;
-    float3 prefilteredColor = SampleEnvMap(PrefilteredEnvMap, PrefilteredSampler, R, mipLevel);
+    float3 prefilteredColor = SampleEnvMap(PrefilteredEnvMap, PrefilteredSampler, envR, mipLevel);
     float2 brdf = EnvBRDFApprox(NdotV, roughness);
-    float3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y);
+    float3 envBRDF = (F0 * brdf.x + brdf.y) * specOcclusion;
 
-    // Blend SSR with prefiltered IBL
-    float ssrWeight = (1.0 - roughness) * ssrColor.a;
-    specularIBL = lerp(specularIBL, ssrColor.rgb, ssrWeight);
+    // UE-style SSR compositing (ReflectionEnvironmentShaders.usf, ReflectionApplyPS).
+    // The SSR target is premultiplied: rgb = reflectedColor * coverage, a = coverage.
+    // Composite with the premultiplied "over" operator so the SSR coverage OCCLUDES
+    // the environment specular along the shared reflection direction R: a confident
+    // hit (a -> 1, e.g. the teapot on a smooth floor) drives the HDRI specular toward
+    // zero instead of stacking on top of it; a miss (a = 0) reveals the environment.
+    // The Fresnel / split-sum term (envBRDF) is applied to the combined reflection
+    // afterwards, so both sources are scaled by the surface reflectance, as UE does.
+    float3 reflection = ssrColor.rgb + prefilteredColor * (1.0 - ssrColor.a);
+    float3 specularIBL = reflection * envBRDF;
 
     float3 indirectLight = (diffuseIBL + specularIBL) * EnvIntensity * ao;
     totalColor += indirectLight;

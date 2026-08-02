@@ -27,7 +27,14 @@ public class SSRPass : IRenderPass
     public int MaxSteps = 64;
     public float StepSize = 0.5f;
     public float MaxRoughness = 0.6f;
-    public float FadeDistance = 0.15f;
+    /// <summary>
+    /// UE-style roughness confidence mask multiplier (SSRParams.w). The hit
+    /// coverage is saturate(roughness * RoughnessMaskMul + 2): with this default
+    /// (-2) confidence is full for roughness &lt;= 0.5 and fades to 0 at
+    /// roughness 1, leaving the rough-lobe blur to the history cone-trace rather
+    /// than attenuating the confidence (UE ScreenSpaceReflections.usf).
+    /// </summary>
+    public float RoughnessMaskMul = -2.0f;
 
     /// <summary>
     /// Shared depth-stencil buffer injected by SceneRendererEngine before
@@ -143,7 +150,7 @@ public class SSRPass : IRenderPass
         _effect.Parameters["Projection"].SetValue(ctx.Camera.ProjectionMatrix);
         _effect.Parameters["PrevViewProj"].SetValue(ctx.PrevViewProj);
         _effect.Parameters["SSRParams"].SetValue(
-            new Vector4(MaxSteps, StepSize, MaxRoughness, FadeDistance));
+            new Vector4(MaxSteps, StepSize, MaxRoughness, RoughnessMaskMul));
 
         _effect.CurrentTechnique!.Passes[0].Apply();
         _device.DrawPrimitives(PrimitiveType.TriangleList, 0, 3);
