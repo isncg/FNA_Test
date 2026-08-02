@@ -71,15 +71,20 @@ float3 T = normalize(cross(up, N));  // 任意方向，不跟 UV 对齐
 
 ## 5. SSR
 
-| 项目 | SceneRenderer 现状 | UE5 做法 |
-|------|-------------------|----------|
-| 步进方式 | 等步长线性 march (64 步 × 0.5) | Hi-Z 层次化 march |
-| 粗糙度模糊 | 3×3 固定 box | GGX importance sampling cone trace |
-| 时域稳定 | 单帧 history，无累积 | 多帧时域累积 + 邻域 clamp (anti-ghosting) |
-| 回退 | 直接 albedo 或 IBL | Lumen Reflections 无缝回退 |
-| 步进精度 | `depthDiff < 0.5` 固定阈值 | 自适应 thickness 比较 |
+> 详细对比见 [ssr-ue-comparison.md](ssr-ue-comparison.md)。
 
-**涉及文件**: `Shaders/SSR_ps.hlsl`, `Passes/SSRPass.cs`
+| 项目 | SceneRenderer 现状 | UE 做法 |
+|------|-------------------|----------|
+| 命中检测 | 符号穿越 + 5 次二分搜索 | 厚度窗口 + 线段插值 |
+| 步进方式 | 等步长线性 march (64 步 × 0.5) | Hi-Z 层次化 march (8–16 步) |
+| 粗糙度模糊 | 3×3 深度感知 bilateral 核 | HZB mip + GGX 多射线锥追踪 |
+| 轮廓边缘 | 显式 edgeMask + weightSum 缩放 | 厚度窗口隐式拒绝 |
+| 时域稳定 | 单帧 history，无累积 | 多帧时域累积 + TAA/TSR |
+| History 内容 | 几何体光照（排除天空盒） | 完整 SceneColor（含天空） |
+| 屏幕边缘 | 硬切 albedo 回退 | Vignette 平滑淡出 |
+| 合成公式 | premultiplied over（与 UE 一致） | premultiplied over |
+
+**涉及文件**: `Shaders/SSR_ps.hlsl`, `Passes/SSRPass.cs`, `Shaders/DeferredLighting_ps.hlsl`
 
 ---
 

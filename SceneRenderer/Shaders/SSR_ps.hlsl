@@ -221,6 +221,28 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
             // above (no hit -> coverage 0 -> environment fallback), as in UE.
             float coverage = saturate(roughness * SSR_ROUGHNESS_MASK_MUL + 2.0);
 
+            // Silhouette-edge fade: the depth-aware blur's weightSum scaling
+            // only catches discontinuities within the (roughness-dependent)
+            // blur kernel.  For very smooth surfaces the kernel is sub-texel,
+            // so hits right at a silhouette edge still get full coverage and
+            // produce a bright outline in the SSR buffer.  Check depth
+            // coherence at a fixed 3-texel radius: if any neighbour differs
+            // strongly, the hit sits on a depth discontinuity (object outline)
+            // and coverage is faded, letting the environment specular fill in.
+            float2 edgeTexel = float2(3.0 / rtW, 3.0 / rtH);
+            float dC = GBufferRT2.Sample(GBuffer2Sampler, hitUV).g;
+            float dL = GBufferRT2.Sample(GBuffer2Sampler, hitUV - float2(edgeTexel.x, 0.0)).g;
+            float dR = GBufferRT2.Sample(GBuffer2Sampler, hitUV + float2(edgeTexel.x, 0.0)).g;
+            float dU = GBufferRT2.Sample(GBuffer2Sampler, hitUV - float2(0.0, edgeTexel.y)).g;
+            float dD = GBufferRT2.Sample(GBuffer2Sampler, hitUV + float2(0.0, edgeTexel.y)).g;
+            float edgeThresh = max(0.1 * dC, 0.2);
+            float edgeMask = 1.0;
+            edgeMask *= (abs(dL - dC) < edgeThresh) ? 1.0 : 0.0;
+            edgeMask *= (abs(dR - dC) < edgeThresh) ? 1.0 : 0.0;
+            edgeMask *= (abs(dU - dC) < edgeThresh) ? 1.0 : 0.0;
+            edgeMask *= (abs(dD - dC) < edgeThresh) ? 1.0 : 0.0;
+            coverage *= edgeMask;
+
             // UE5-style temporal reflection: sample the previous frame's lit
             // HDR scene (direct light + IBL + sky already included) instead of
             // the flat GBuffer albedo. Reconstruct the hit's world position,

@@ -30,6 +30,25 @@ public class GBufferPass : IRenderPass
         CounterClockwiseStencilPass = StencilOperation.Replace,
     };
 
+    /* Depth-write + stencil-CLEAR state for objects WITHOUT ReceivesSSR.
+     * Writes stencil = 0 so that if a non-receiver (e.g. the teapot) is
+     * drawn on top of a receiver (e.g. the floor, stencil 1), the SSR pass
+     * will not mistakenly compute reflections at the non-receiver's pixels.
+     * Without this, DepthStencilState.Default leaves stencil untouched and
+     * the underlying receiver's mark leaks through.
+     */
+    private static readonly DepthStencilState DepthWriteStencilClear = new()
+    {
+        DepthBufferEnable = true,
+        DepthBufferWriteEnable = true,
+        StencilEnable = true,
+        ReferenceStencil = 0,
+        StencilFunction = CompareFunction.Always,
+        StencilPass = StencilOperation.Replace,
+        CounterClockwiseStencilFunction = CompareFunction.Always,
+        CounterClockwiseStencilPass = StencilOperation.Replace,
+    };
+
     public string Name => "GBuffer";
     public Texture2D? DebugOutput => _rt0;
 
@@ -114,7 +133,7 @@ public class GBufferPass : IRenderPass
 
             _device.DepthStencilState = obj.ReceivesSSR
                 ? DepthWriteStencilMark
-                : DepthStencilState.Default;
+                : DepthWriteStencilClear;
 
             var world = obj.LocalTransform;
             var worldViewProj = world * view * proj;
