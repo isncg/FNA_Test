@@ -124,14 +124,19 @@ public class SceneRendererEngine : IDisposable
         // Pass 6: Deferred Lighting
         DeferredLighting.Execute(ctx);
 
+        // Refresh the SSR temporal history with this frame's lit geometry
+        // (direct light + IBL, NO skybox) so next frame's SSR reflections
+        // contain only scene surfaces.  The sky/environment reflection is
+        // provided exclusively by the IBL term in the lighting pass via the
+        // compositing formula SSR.rgb + EnvSpecular * (1 - SSR.a); including
+        // the skybox in the history would double-count it and bleed sky color
+        // into SSR at silhouette edges.
+        if (SSR.Enabled)
+            SSR.UpdateHistory(ctx);
+
         // Pass 7: Skybox (depth-tested against the shared depth buffer)
         if (Skybox.Enabled)
             Skybox.Execute(ctx);
-
-        // Refresh the SSR temporal history with this frame's fully-lit HDR
-        // scene (sky included) so next frame's reflections contain the IBL.
-        if (SSR.Enabled)
-            SSR.UpdateHistory(ctx);
 
         // Pass 8: Bloom
         if (Bloom.Enabled)

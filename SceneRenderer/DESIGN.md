@@ -52,10 +52,13 @@ that already contains direct light, IBL and the sky.
 
 Data flow:
 
-- `SSRPass` owns `_historyRT` (HalfVector4). After the Skybox pass each frame,
-  `SceneRendererEngine` calls `SSRPass.UpdateHistory(ctx)`, which copies the
-  fully-lit `HdrSceneRT` (sky included) into `_historyRT` using the DebugView
-  effect as a fullscreen RGB passthrough.
+- `SSRPass` owns `_historyRT` (HalfVector4). After deferred lighting (before
+  the Skybox pass) each frame, `SceneRendererEngine` calls
+  `SSRPass.UpdateHistory(ctx)`, which copies the lit `HdrSceneRT` (geometry
+  only, no skybox) into `_historyRT` using the DebugView effect as a fullscreen
+  RGB passthrough. The skybox is excluded so SSR reflections contain only scene
+  surfaces; environment reflections are provided by the IBL term in the lighting
+  pass via the compositing formula `SSR.rgb + EnvSpecular * (1 - SSR.a)`.
 - On a ray-march hit the shader reconstructs the hit's world position, reprojects
   it with `PrevViewProj`, and samples `_historyRT` (3x3 cone-trace blur for
   roughness). If the reprojected UV falls off-screen (disocclusion) it degrades

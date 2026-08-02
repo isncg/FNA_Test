@@ -9,7 +9,7 @@ namespace SceneRenderer;
 /// <remarks>
 /// UE5-style temporal reflections: hits sample the previous frame's lit HDR
 /// scene (direct light + IBL + sky) rather than the flat GBuffer albedo. The
-/// history buffer is refreshed after the skybox pass via <see cref="UpdateHistory"/>.
+/// history buffer is refreshed after deferred lighting (before the skybox) via <see cref="UpdateHistory"/>.
 /// </remarks>
 public class SSRPass : IRenderPass
 {
@@ -160,9 +160,10 @@ public class SSRPass : IRenderPass
     }
 
     /// <summary>
-    /// Copies the fully-lit HDR scene (after the skybox pass) into the history
-    /// buffer so the next frame's SSR can reflect it. Must be called after the
-    /// Skybox pass each frame.
+    /// Copies the lit HDR scene (after deferred lighting, before the skybox) into
+    /// the history buffer so the next frame's SSR reflects only scene geometry.
+    /// The skybox is excluded: environment reflections are handled by the IBL
+    /// term in the lighting pass, not by SSR.
     /// </summary>
     public void UpdateHistory(RenderContext ctx)
     {

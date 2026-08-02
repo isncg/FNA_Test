@@ -4,7 +4,7 @@
 //   t0/s0: GBufferRT0 (albedo.RGB, bakedAO.A)
 //   t1/s1: GBufferRT1 (worldNormal.RGB*0.5+0.5, roughness.A)
 //   t2/s2: GBufferRT2 (metallic.R, linearDepth.G)
-//   t3/s3: SceneHistory (previous frame's lit HDR, after the skybox pass)
+//   t3/s3: SceneHistory (previous frame's lit geometry, no skybox)
 //
 // Algorithm:
 //   1. Reconstruct view-space position from depth + inverse projection
@@ -191,6 +191,19 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
                     lo = mid;
             }
             rayPos = hi;  // precise intersection point
+
+            // Recompute the screen UV from the refined position (the coarse
+            // sampleUV predates the binary search and can be up to half a step
+            // away — using it for the depth-aware blur's depth comparison
+            // rejects valid taps and reintroduces height-dependent banding).
+            float4 hitProj;
+            hitProj.x = rayPos.x * Projection._11;
+            hitProj.y = rayPos.y * Projection._22;
+            hitProj.z = rayPos.z * Projection._33 + Projection._43;
+            hitProj.w = rayPos.z;
+            float2 hitUV = float2(
+                (hitProj.x / hitProj.w) * 0.5 + 0.5,
+                (1.0 - hitProj.y / hitProj.w) * 0.5);
             // Coverage = occlusion mask for the environment specular (UE-style).
             // A confirmed hit is a reliable occluder of the infinitely-far
             // environment. UE shapes the confidence with a roughness mask
@@ -226,25 +239,45 @@ float4 PSMain(PS_INPUT input) : SV_TARGET0
             {
                 // Disoccluded / off-screen in the previous frame: degrade to the
                 // flat albedo rather than smearing clamped history edge texels.
-                hitColor = GBufferRT0.Sample(GBuffer0Sampler, sampleUV).rgb;
+                hitColor = GBufferRT0.Sample(GBuffer0Sampler, hitUV).rgb;
             }
             else
             {
-                // Roughness blur approximation (cone-tracing) in history space
+                // Depth-aware roughness blur (bilateral cone-trace approx).
+                // A plain box blur bleeds the bright silhouette-edge color of
+                // the history into the surrounding pixels, producing a halo
+                // around reflected objects.  Weighting each tap by depth
+                // similarity (comparing the current-frame GBuffer depth at the
+                // offset UV against the hit depth) prevents the blur from
+                // crossing depth discontinuities — only pixels on the same
+                // surface contribute, so the reflection boundary stays sharp.
                 float blurRadius = roughness * 2.0;
                 float2 texelSize = float2(1.0 / rtW, 1.0 / rtH);
                 hitColor = float3(0, 0, 0);
+                float weightSum = 0.0;
                 [unroll]
                 for (int bx = -1; bx <= 1; bx++)
                 {
                     [unroll]
                     for (int by = -1; by <= 1; by++)
                     {
-                        hitColor += SceneHistory.Sample(HistorySampler,
-                            prevUV + float2(bx, by) * texelSize * blurRadius).rgb;
+                        float2 offset = float2(bx, by) * texelSize * blurRadius;
+                        float tapDepth = GBufferRT2.Sample(GBuffer2Sampler, hitUV + offset).g;
+                        float depthW = (abs(tapDepth - rayPos.z) < max(0.05 * rayPos.z, 0.1)) ? 1.0 : 0.0;
+                        hitColor += SceneHistory.Sample(HistorySampler, prevUV + offset).rgb * depthW;
+                        weightSum += depthW;
                     }
                 }
-                hitColor /= 9.0;
+                hitColor /= max(weightSum, 1.0);
+
+                // Scale coverage by the fraction of depth-valid taps.  When
+                // the hit sits at a depth discontinuity and the blur rejects
+                // most/all neighbours, the reflected colour is unreliable
+                // (black or very dark).  Reducing coverage lets the lighting
+                // pass fall back to the environment specular instead of
+                // compositing a confident-but-black reflection that appears
+                // as a dark artefact in the final image.
+                coverage *= weightSum / 9.0;
             }
 
             // Premultiplied output: rgb = reflectedColor * coverage, a = coverage.
